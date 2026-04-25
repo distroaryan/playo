@@ -3,4 +3,4 @@ djangorestframework
 psycopg2-binary
 celery
 redis
-
+testcontainers[postgres]
