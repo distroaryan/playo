@@ -37,6 +37,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'django_celery_results',
+    'api',
 ]
 
 MIDDLEWARE = [
@@ -69,15 +72,40 @@ TEMPLATES = [
 WSGI_APPLICATION = 'playto.wsgi.application'
 
 
+import os
+from urllib.parse import urlparse
+
+# Load .env
+env_path = BASE_DIR / '.env'
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                key, val = line.strip().split('=', 1)
+                os.environ.setdefault(key, val)
+
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+db_url = urlparse(os.environ.get('DATABASE_URL'))
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': db_url.path[1:],
+        'USER': db_url.username,
+        'PASSWORD': db_url.password,
+        'HOST': db_url.hostname,
+        'PORT': db_url.port,
     }
 }
+
+# Celery Settings
+CELERY_BROKER_URL = os.environ.get('REDIS_URL')
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+
+DEFAULT_MERCHANT_ID = os.environ.get('DEFAULT_MERCHANT_ID')
 
 
 # Password validation
