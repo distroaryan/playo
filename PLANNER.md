@@ -14,12 +14,12 @@ no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
 
 **Git commit:** `chore: project scaffold, docker-compose, env config`
 
-- [ ] Initialise Django project (`playto/`) and DRF app structure
-- [ ] Create `docker-compose.yml` with four services: `postgres`, `redis`, `django`, `celery`
-- [ ] `.env` file with `DATABASE_URL`, `REDIS_URL`, `DEFAULT_MERCHANT_ID`
-- [ ] `requirements.txt` — django, djangorestframework, psycopg2-binary, celery, redis, django-celery-results
-- [ ] Confirm all four containers start and connect cleanly
-- [ ] `README.md` with setup instructions and how to run locally
+- [x] Initialise Django project (`playto/`) and DRF app structure
+- [x] Create `docker-compose.yml` with four services: `postgres`, `redis`, `django`, `celery`
+- [x] `.env` file with `DATABASE_URL`, `REDIS_URL`, `DEFAULT_MERCHANT_ID`
+- [x] `requirements.txt` — django, djangorestframework, psycopg2-binary, celery, redis, django-celery-results
+- [x] Confirm all four containers start and connect cleanly
+- [x] `README.md` with setup instructions and how to run locally
 
 ---
 
@@ -27,40 +27,40 @@ no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
 
 **Git commit:** `feat: merchant, ledger, payout, idempotency key models`
 
-- [ ] **`Merchant` model**
+- [x] **`Merchant` model**
   - `id` (UUID), `name`, `email`, `created_at`
   - No stored `balance` field — balance is always derived from ledger
 
-- [ ] **`Ledger` model** 
+- [x] **`Ledger` model** 
   - `id` (UUID), `merchant` (FK)
   - `entry_type` (choices: `CREDIT`, `HOLD`, `DEBIT`)
   - `amount_paise` (`BigIntegerField` — positive for CREDIT, negative for HOLD/DEBIT)
   - `payout` (FK to `Payout`, nullable — set on HOLD and DEBIT rows)
   - `created_at`, `updated_at`
 
-- [ ] **`Payout` model** (state machine)
+- [x] **`Payout` model** (state machine)
   - `id` (UUID), `merchant` (FK), `bank_account_id`
   - `amount_paise` (`BigIntegerField`)
   - `status` (choices: `PENDING`, `PROCESSING`, `SUCCESS`, `FAILED`)
   - `retry_count` (`IntegerField`, default 0)
   - `created_at`, `updated_at`
 
-- [ ] **`IdempotencyKey` model**
+- [x] **`IdempotencyKey` model**
   - `key` (primary key, string)
   - `payout` (OneToOneField to `Payout`)
   - `status` (choices: `PENDING`, `COMPLETED`)
   - `created_at`
   - On duplicate request: look up key → get linked payout → serialize and return it. No stored response body.
 
-- [ ] **`OutboxEvent` model** (transactional outbox — written atomically with every payout)
+- [x] **`OutboxEvent` model** (transactional outbox — written atomically with every payout)
   - `id` (UUID), `event_type` (e.g. `PAYOUT_REQUESTED`)
   - `payload` (JSONField — contains `payout_id` and anything the relay worker needs)
   - `status` (choices: `PENDING`, `PROCESSED`, `FAILED`)
   - `created_at`, `processed_at` (nullable)
   - Composite index on `(status, created_at)` — the relay worker queries this on every poll cycle
 
-- [ ] Run and verify all migrations
-- [ ] Register all models in Django admin
+- [x] Run and verify all migrations
+- [x] Register all models in Django admin
 
 ---
 
@@ -115,7 +115,7 @@ This is the most critical checkpoint. Order of operations is strict.
     { "payout_id": "...", "status": "pending", "amount_paise": 50000 }
     ```
 
-- [ ] Write unit tests for: missing header, duplicate key (pending), duplicate key (completed), insufficient balance, successful creation, outbox entry created alongside payout
+- [ ] Write unit tests for: missing header, duplicate key (pending), duplicate key (completed), insufficient balance, successful creation, outbox entry created alongside payout using testcontainers
 
 ---
 
