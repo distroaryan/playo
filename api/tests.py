@@ -37,18 +37,12 @@ class PayoutAPITests(TransactionTestCase):
         Ledger.objects.create(
             merchant=self.merchant,
             entry_type='DEBIT',
-            amount_paise=10, 
+            amount_paise=-10, 
         )
 
         # Clean up any leftover Redis idempotency keys from previous tests
         for key in redis_client.scan_iter('idempotency:*'):
             redis_client.delete(key)
-
-    def tearDown(self):
-        # Clean up Redis idempotency keys after each test
-        for key in redis_client.scan_iter('idempotency:*'):
-            redis_client.delete(key)
-        super().tearDown()
 
     def test_missing_header(self):
         payload = {
@@ -166,7 +160,7 @@ class PayoutAPITests(TransactionTestCase):
         self.assertEqual(status_codes.count(status.HTTP_409_CONFLICT), 2)
         
         # Verify db invariants: only 1 payout, 1 hold ledger, 1 outbox event
-        self.assertEqual(Payout.objects.filter(amount_paise=5000).count(), 1)
+        self.assertEqual(Payout.objects.filter(amount_paise=50).count(), 1)
         self.assertEqual(Ledger.objects.filter(entry_type='HOLD').count(), 1)
         self.assertEqual(OutboxEvent.objects.filter(event_type='PAYOUT_REQUESTED').count(), 1)
 
@@ -192,7 +186,7 @@ class PayoutAPITests(TransactionTestCase):
 
         # Run 2 requests concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(make_request(i)) for i in range(3)]
+            futures = [executor.submit(make_request, i) for i in range(3)]
             responses = [f.result() for f in concurrent.futures.as_completed(futures)]
 
         status_codes = [r.status_code for r in responses]

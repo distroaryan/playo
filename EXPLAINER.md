@@ -126,10 +126,12 @@ The Lua script is atomic — Redis guarantees no other commands can execute betw
         elif redis_result != 'NEW':
             # Has a stored response payload — replay it
             return Response(json.loads(redis_result), status=status.HTTP_200_OK)
-        # redis_result == 'NEW' → fall through to DB logic
     except Exception as e:
-        logger.warning("Redis idempotency check failed, falling through: %s", e)
+        logger.error("Redis idempotency check failed: %s", e)
+        return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 ```
+
+Since Redis is the sole idempotency gate, if it is unreachable, the system **cannot guarantee** that a duplicate payout won't be created. Rather than silently proceeding and risking double-processing, the API returns a `500 Internal Server Error` and the client must retry.
 
 **The State Transition (Celery Worker):**
 When the Celery worker finishes processing a payout (either `SUCCESS` or `FAILED`), it updates the Redis key from `PENDING` to the final JSON response payload:
@@ -218,9 +220,9 @@ By placing this explicit check within a `select_for_update()` block *before* the
 
 ## 5. The AI Audit
 
-### Round 1: PostgreSQL-Based Idempotency (Bad Code)
+### The Bad Code — PostgreSQL-Based Idempotency
 
-The AI initially generated idempotency logic that relied entirely on a PostgreSQL `IdempotencyKey` table. It performed the check **outside** the transaction:
+The AI initially generated idempotency logic that relied entirely on a PostgreSQL `IdempotencyKey` table. The check was performed **outside** the transaction, and the key was inserted at the **very end** of the transaction:
 
 ```python
     # Idempotency check before starting a transaction
@@ -241,38 +243,12 @@ The AI initially generated idempotency logic that relied entirely on a PostgreSQ
         IdempotencyKey.objects.create(key=idempotency_key, payout=payout, status='PENDING')
 ```
 
-**Why this was BAD:**
-- If two concurrent requests arrive simultaneously, both will execute `IdempotencyKey.objects.get()` outside the transaction, both will see `DoesNotExist`, and both will proceed into the transaction.
-- The second request will only fail at the very end when it tries to `create()` the `IdempotencyKey`, throwing an `IntegrityError` and rolling back the entire transaction — wasting all the computation for the Payout, Ledger, and OutboxEvent writes.
-- Under load, this approach **does not scale**. Every duplicate request performs the full transaction before failing. With 100 concurrent duplicate requests, 99 of them will do the full work and then roll back.
+**Why this is wrong:**
+- If two concurrent requests arrive simultaneously, both execute `IdempotencyKey.objects.get()` **outside** the transaction, both see `DoesNotExist`, and both proceed.
+- The second request only fails at the **very end** when it tries to `create()` the `IdempotencyKey`, throwing an `IntegrityError` and rolling back all the work — the Payout, Ledger, and OutboxEvent writes are all wasted.
+- Under load, this **does not scale**. With 100 concurrent duplicate requests, 99 of them do the full transaction before failing. Every single one opens a DB connection, acquires a row lock, writes to 3 tables, and then rolls everything back.
 
-### Round 2: PostgreSQL with Nested Transactions (Better, But Inefficient)
-
-The AI then moved the idempotency check inside the transaction to fail early, using nested `transaction.atomic()` savepoints:
-
-```python
-    with transaction.atomic():
-        try:
-            with transaction.atomic():
-                key_record = IdempotencyKey.objects.create(key=idempotency_key, status='PENDING')
-            created = True
-        except IntegrityError:
-            key_record = IdempotencyKey.objects.select_for_update().get(key=idempotency_key)
-            created = False
-
-        if not created:
-            if key_record.status == 'COMPLETED':
-                return Response({...}, status=status.HTTP_200_OK)
-            else:
-                return Response({"error": "Request already in flight"}, status=status.HTTP_409_CONFLICT)
-```
-
-**Why this was still problematic at scale:**
-- It fails early, which is an improvement, but every single request — even obvious duplicates — still opens a PostgreSQL connection, starts a transaction, and performs a write operation.
-- PostgreSQL row-level locks on the `IdempotencyKey` table introduce contention under high concurrency.
-- The `IdempotencyKey` model adds an entire table that needs migrations, indexes, and maintenance for what is fundamentally a caching concern.
-
-### Round 3: Redis Lua Script (Current, Scalable Solution)
+### The Correct Code — Redis Lua Script
 
 The current implementation uses **Redis as the sole atomic gate** for idempotency. The PostgreSQL `IdempotencyKey` model has been completely dropped.
 
@@ -285,13 +261,13 @@ end
 return val
 ```
 
-**Why this is better:**
+**Why this is correct:**
 - **Speed**: Redis operates entirely in memory. A duplicate check takes microseconds, not milliseconds.
 - **Atomicity**: The Lua script guarantees `GET` + `SET` execute as a single atomic operation — no race conditions possible, even under extreme concurrency.
 - **Zero DB load for duplicates**: Duplicate requests are rejected at the Redis layer before they ever open a database connection. Under 100 concurrent duplicate requests, only **1** touches PostgreSQL.
 - **Self-healing**: The `PENDING` key has a TTL (5 minutes). If the server crashes mid-request, the lock automatically expires and the client can safely retry.
 - **Simpler schema**: No `IdempotencyKey` table, no migrations, no joins, no `select_for_update()` contention on a shared index.
+- **Hard fail on Redis outage**: If Redis is unreachable, the API returns `500 Internal Server Error` instead of silently proceeding — because proceeding without the idempotency gate would risk creating duplicate payouts.
 
 **Why a Lua script instead of `redis.get()` + `redis.set()` in Python?**
 If we used separate `GET` and `SET` commands from the Python client, two concurrent requests could both execute `GET` simultaneously, both see that the key is missing, and both proceed to the database — defeating the purpose entirely. The Lua script eliminates this by making the check-and-set a single uninterruptible operation inside Redis.
-

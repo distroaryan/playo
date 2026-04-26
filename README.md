@@ -6,6 +6,8 @@ A payment engine simulation designed with robust financial systems in mind, buil
 
 The system is designed to handle high concurrency without race conditions, overdrawn accounts, or duplicate processing.
 
+### Client → Backend Request Flow
+
 ```mermaid
 flowchart TD
     Client[Client Request] --> API[Django API]
@@ -13,6 +15,7 @@ flowchart TD
     
     RedisLua -- "Key = PENDING" --> Conflict[409 Conflict]
     RedisLua -- "Key = JSON Response" --> OK[200 OK Cached Response]
+    RedisLua -- "Redis Unreachable" --> ServerError[500 Internal Server Error]
     RedisLua -- "Key = null → SET PENDING" --> DB_Tx[Start DB Transaction]
     
     subgraph PostgreSQL Transaction
@@ -30,28 +33,97 @@ flowchart TD
     DB_Ledger --> DB_Outbox
     
     DB_Outbox --> Return["202 Accepted (Redis key stays PENDING)"]
+```
+
+### Celery Outbox Worker Flow
+
+```mermaid
+flowchart LR
+    CeleryBeat[Celery Beat Scheduler] --> |Every 10s| RelayTask[relay_outbox Task]
+    RelayTask --> |"Poll OutboxEvent (skip_locked)"| DB_Outbox[(PostgreSQL OutboxEvent)]
+    DB_Outbox --> |Dispatch| ProcessTask[process_payout Task]
     
-    subgraph Celery Background Processing
-        CeleryBeat[Celery Beat Scheduler] --> |Every 10s| CeleryOutbox[Outbox Relay Worker]
-        CeleryOutbox --> |Poll OutboxEvent| CeleryTask[Process Payout Task]
-        CeleryTask --> |Simulate External API| Bank[Bank Gateway Simulation]
-        Bank --> CeleryTask
-        CeleryTask --> DB_Update["Update DB (Payout status + Ledger)"]
-        CeleryTask --> RedisUpdate["Update Redis Key → JSON Response"]
-    end
+    ProcessTask --> Simulation{Bank Gateway Simulation}
+    Simulation -- "70% Success" --> SuccessPath[Update Payout → SUCCESS]
+    Simulation -- "20% Failure" --> FailPath[Rollback → FAILED]
+    Simulation -- "10% Timeout" --> RetryPath["Re-enqueue (Exp. Backoff)"]
+    
+    SuccessPath --> WriteLedger["Write DEBIT + Delete HOLD"]
+    FailPath --> DeleteHold[Delete HOLD Ledger]
+    
+    WriteLedger --> UpdateRedis["Update Redis Key → JSON Response"]
+    DeleteHold --> UpdateRedis
 ```
 
 ### Key Architectural Decisions
 
-1. **Redis-Only Idempotency**: To prevent duplicate payouts, the system relies on an `Idempotency-Key` header. An atomic Redis Lua script acts as the sole idempotency gate. The Lua script atomically checks if a key exists; if not, it sets it to `PENDING` with a TTL. If the key already exists as `PENDING`, the request is rejected with `409 Conflict`. If the key contains a JSON response (written by the Celery worker after payout completion), it is replayed as `200 OK`. No PostgreSQL `IdempotencyKey` table is needed — this eliminates an entire table, its indexes, migrations, and row-level lock contention under load.
+1. **Redis-Only Idempotency**: An atomic Redis Lua script acts as the sole idempotency gate. If the key exists as `PENDING`, return `409 Conflict`. If it contains JSON (written by the Celery worker), replay it as `200 OK`. **If Redis is unreachable**, the API returns `500 Internal Server Error` — it cannot safely proceed without the idempotency gate.
 
-2. **Ledger Over Mutable Balance**: Instead of storing a single mutable `balance` integer on the `Merchant` (which invites data corruption and race conditions), balances are derived dynamically using `SUM()` aggregations on an append-only `Ledger`.
+2. **Ledger Over Mutable Balance**: Balances are derived dynamically using `SUM()` aggregations on an append-only `Ledger` rather than storing a mutable integer, eliminating race conditions.
 
-3. **Pessimistic Row-Level Locking**: When modifying financial state, PostgreSQL's `SELECT ... FOR UPDATE` ensures only one request modifies a specific merchant's ledger at any exact millisecond.
+3. **Pessimistic Row-Level Locking**: PostgreSQL's `SELECT ... FOR UPDATE` ensures only one request modifies a merchant's ledger at any given moment.
 
-4. **Transactional Outbox Pattern**: External systems (like bank gateways) are never called synchronously during the HTTP request. Instead, an `OutboxEvent` is committed to the database within the exact same transaction as the ledger hold. A Celery worker later relays these events, and upon completion, writes the final response JSON to Redis. This guarantees *exactly-once* delivery — even if the web server crashes immediately after sending a 202 response, the outbox worker will ensure the payout completes.
+4. **Transactional Outbox Pattern**: An `OutboxEvent` is committed within the same transaction as the ledger hold. A Celery worker later relays these events, guaranteeing *exactly-once* delivery.
 
-5. **Worker-Driven State Finalization**: The Celery worker is responsible for updating the Redis idempotency key from `PENDING` to the final JSON response once the payout reaches a terminal state (`SUCCESS` or `FAILED`). This ensures clients can replay their request and receive the correct final state.
+5. **Worker-Driven State Finalization**: The Celery worker updates the Redis idempotency key from `PENDING` to the final JSON response once the payout reaches a terminal state (`SUCCESS` or `FAILED`).
+
+### Data Model
+
+```mermaid
+classDiagram
+    class Merchant {
+        +UUID id
+        +String name
+        +String email
+        +DateTime created_at
+        +DateTime updated_at
+    }
+    class Payout {
+        +UUID id
+        +UUID merchant_id
+        +String bank_account_id
+        +BigInt amount_paise
+        +String status
+        +Int retry_count
+        +DateTime created_at
+        +DateTime updated_at
+    }
+    class Ledger {
+        +UUID id
+        +UUID merchant_id
+        +String entry_type
+        +BigInt amount_paise
+        +UUID payout_id
+        +DateTime created_at
+    }
+    class OutboxEvent {
+        +UUID id
+        +String event_type
+        +JSON payload
+        +String status
+        +DateTime created_at
+        +DateTime processed_at
+    }
+
+    Merchant "1" --> "*" Payout : has
+    Merchant "1" --> "*" Ledger : has
+    Payout "1" --> "*" Ledger : references
+    Payout "1" --> "1" OutboxEvent : triggers
+```
+
+### Payout State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : Payout Created
+    PENDING --> PROCESSING : Worker Picks Up
+    PROCESSING --> SUCCESS : Bank Approved
+    PROCESSING --> FAILED : Bank Declined
+    PENDING --> PROCESSING : Retry After Timeout
+    PROCESSING --> PENDING : Timeout (re-enqueued)
+    FAILED --> [*] : Terminal
+    SUCCESS --> [*] : Terminal
+```
 
 ---
 
@@ -66,14 +138,18 @@ flowchart TD
    ```bash
    .\.venv\Scripts\activate
    ```
-4. Run database migrations:
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+5. Run database migrations:
    ```bash
    python manage.py migrate
    ```
 
 ## Starting the Application
 
-To run the full stack locally, you will need 3 separate terminal windows (with the `.venv` activated in each).
+To run the full stack locally, you will need 4 separate terminal windows.
 
 **Terminal 1: Django API Server**
 ```bash
@@ -82,18 +158,28 @@ python manage.py runserver
 
 **Terminal 2: Celery Worker (Payout Processing)**
 ```bash
-celery -A playto worker --loglevel=info -P gevent
+celery -A playto worker --loglevel=info -P solo
 ```
-*(Note: Windows users usually need to install and use `gevent` or `solo` pool for Celery).*
 
 **Terminal 3: Celery Beat (Outbox Relay Watcher)**
 ```bash
 celery -A playto beat --loglevel=info
 ```
 
+**Terminal 4: React Dashboard (Frontend)**
+```bash
+cd web
+npm install
+npm run dev
+```
+Create a `.env` file inside `web/` with your merchant UUID:
+```
+VITE_MERCHANT_ID=<your-merchant-uuid>
+```
+The dashboard will be available at `http://localhost:5173`.
+
 ## Running Tests
 Run the test suite using `testcontainers` to automatically spin up an isolated PostgreSQL instance:
 ```bash
 python manage.py test api
 ```
-

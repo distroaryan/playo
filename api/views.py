@@ -81,7 +81,8 @@ def create_payout(request):
             # Has a stored response payload — return it
             return Response(json.loads(redis_result), status=status.HTTP_200_OK)
     except Exception as e:
-        logger.warning("Redis idempotency check failed, falling through: %s", e)
+        logger.error("Redis idempotency check failed: %s", e)
+        return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # Step 4 - Single atomic DB transaction
     try:
