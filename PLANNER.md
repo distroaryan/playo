@@ -140,7 +140,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ### Relay worker task:
 
-- [ ] **`relay_outbox` Celery Beat task** — runs every 5 seconds
+- [x] **`relay_outbox` Celery Beat task** — runs every 5 seconds
   - Query with `select_for_update(skip_locked=True)`:
     ```python
     events = OutboxEvent.objects.select_for_update(skip_locked=True).filter(
@@ -156,7 +156,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
   - Query: `OutboxEvent.objects.filter(status='PENDING', created_at__lt=now - 15min)`
   - Mark as `FAILED`, log with payout ID
 
-- [ ] Add both tasks to `CELERY_BEAT_SCHEDULE` in `settings.py`
+- [x] Add both tasks to `CELERY_BEAT_SCHEDULE` in `settings.py`
 
 ---
 
@@ -166,27 +166,27 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ### Task structure:
 
-- [ ] **`process_payout` Celery task**
+- [x] **`process_payout` Celery task**
   - `bind=True`, `soft_time_limit=30`, `max_retries=3`
   - On pickup: update `payout.status = PROCESSING`
 
-- [ ] **Simulation logic**
+- [x] **Simulation logic**
   ```
   random() < 0.70  →  SUCCESS path
   random() < 0.90  →  FAILURE path   (20% of total)
   else             →  HANG path      (10% of total)
   ```
 
-- [ ] **SUCCESS path**
+- [x] **SUCCESS path**
   - `payout.status = SUCCESS`
   - Write `Ledger(entry_type=DEBIT, amount_paise=-amount_paise, payout=payout)` — finalises the debit
   - Delete the `HOLD` ledger row linked to this payout
   - Update `IdempotencyKey.status = COMPLETED`
 
-- [ ] **FAILURE path — no retry, immediate rollback**
+- [x] **FAILURE path — no retry, immediate rollback**
   - Call `rollback_payout(payout_id, reason='bank declined')` immediately
 
-- [ ] **HANG path — retry with exponential backoff, then rollback**
+- [x] **HANG path — retry with exponential backoff, then rollback**
   - Catch `SoftTimeLimitExceeded`
   - Increment `payout.retry_count`
   - If `retry_count <= 3` → re-enqueue with backoff, status stays `PROCESSING`:
@@ -200,7 +200,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
     ```
   - If `retry_count > 3` → call `rollback_payout(payout_id, reason='max hang retries exceeded')`
 
-- [ ] **`rollback_payout(payout_id, reason)` — shared function**
+- [x] **`rollback_payout(payout_id, reason)` — shared function**
   ```python
   def rollback_payout(payout_id, reason):
       with transaction.atomic():

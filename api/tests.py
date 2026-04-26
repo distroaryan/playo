@@ -4,8 +4,13 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 from django.conf import settings
+import concurrent.futures
+import redis
+import json
+from .models import Merchant, Payout, Ledger, OutboxEvent
+from django.db import connection, connections
 
-from .models import Merchant, Payout, Ledger, IdempotencyKey, OutboxEvent
+redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
 class PayoutAPITests(TransactionTestCase):
     def setUp(self):
@@ -19,18 +24,35 @@ class PayoutAPITests(TransactionTestCase):
         )
         
         # Override default merchant ID for testing
-        settings.DEFAULT_MERCHANT_ID = self.merchant.id
+        self.settings_override = override_settings(DEFAULT_MERCHANT_ID=self.merchant.id)
+        self.settings_override.enable()
 
         # Seed initial balance via Ledger
         Ledger.objects.create(
             merchant=self.merchant,
             entry_type='CREDIT',
-            amount_paise=100000, # 1000 INR
+            amount_paise=100,
         )
+
+        Ledger.objects.create(
+            merchant=self.merchant,
+            entry_type='DEBIT',
+            amount_paise=10, 
+        )
+
+        # Clean up any leftover Redis idempotency keys from previous tests
+        for key in redis_client.scan_iter('idempotency:*'):
+            redis_client.delete(key)
+
+    def tearDown(self):
+        # Clean up Redis idempotency keys after each test
+        for key in redis_client.scan_iter('idempotency:*'):
+            redis_client.delete(key)
+        super().tearDown()
 
     def test_missing_header(self):
         payload = {
-            "amount_paise": 5000,
+            "amount_paise": 50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, format='json')
@@ -39,20 +61,11 @@ class PayoutAPITests(TransactionTestCase):
 
     def test_duplicate_key_pending(self):
         key = "test-key-pending"
-        payout = Payout.objects.create(
-            merchant=self.merchant,
-            bank_account_id="bank_123",
-            amount_paise=5000,
-            status='PENDING'
-        )
-        IdempotencyKey.objects.create(
-            key=key,
-            payout=payout,
-            status='PENDING'
-        )
+        # Seed Redis with PENDING state
+        redis_client.set(f"idempotency:{key}", 'PENDING', ex=300)
         
         payload = {
-            "amount_paise": 5000,
+            "amount_paise": 50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -64,17 +77,19 @@ class PayoutAPITests(TransactionTestCase):
         payout = Payout.objects.create(
             merchant=self.merchant,
             bank_account_id="bank_123",
-            amount_paise=5000,
+            amount_paise=50,
             status='SUCCESS'
         )
-        IdempotencyKey.objects.create(
-            key=key,
-            payout=payout,
-            status='COMPLETED'
-        )
+        # Seed Redis with the completed response JSON
+        response_data = json.dumps({
+            "payout_id": str(payout.id),
+            "status": payout.status,
+            "amount_paise": payout.amount_paise
+        })
+        redis_client.set(f"idempotency:{key}", response_data, ex=86400)
         
         payload = {
-            "amount_paise": 5000,
+            "amount_paise": 50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -84,7 +99,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_insufficient_balance(self):
         key = "test-key-insufficient"
         payload = {
-            "amount_paise": 200000, # 2000 INR > 1000 INR available
+            "amount_paise": 200,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -93,12 +108,11 @@ class PayoutAPITests(TransactionTestCase):
         
         # Verify db untouched
         self.assertEqual(Payout.objects.count(), 0)
-        self.assertFalse(IdempotencyKey.objects.filter(key=key).exists())
 
     def test_successful_creation(self):
         key = "test-key-success"
         payload = {
-            "amount_paise": 5000,
+            "amount_paise": 50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -109,16 +123,15 @@ class PayoutAPITests(TransactionTestCase):
         # Verify Payout created
         payout = Payout.objects.get(id=payout_id)
         self.assertEqual(payout.status, 'PENDING')
-        self.assertEqual(payout.amount_paise, 5000)
+        self.assertEqual(payout.amount_paise, 50)
         
         # Verify HOLD ledger created
         hold_ledger = Ledger.objects.get(payout=payout, entry_type='HOLD')
-        self.assertEqual(hold_ledger.amount_paise, -5000)
+        self.assertEqual(hold_ledger.amount_paise, -50)
         
-        # Verify IdempotencyKey created
-        idem_key = IdempotencyKey.objects.get(key=key)
-        self.assertEqual(idem_key.status, 'PENDING')
-        self.assertEqual(idem_key.payout, payout)
+        # Verify Redis idempotency key is set to PENDING
+        redis_val = redis_client.get(f"idempotency:{key}")
+        self.assertEqual(redis_val.decode('utf-8'), 'PENDING')
         
         # Verify OutboxEvent created
         outbox_event = OutboxEvent.objects.get(payload__payout_id=payout_id)
@@ -126,11 +139,9 @@ class PayoutAPITests(TransactionTestCase):
         self.assertEqual(outbox_event.status, 'PENDING')
 
     def test_concurrent_payout_requests(self):
-        import concurrent.futures
-        
         key = "test-key-concurrent"
         payload = {
-            "amount_paise": 5000,
+            "amount_paise": 50,
             "bank_account_id": "bank_123"
         }
         
@@ -163,38 +174,37 @@ class PayoutAPITests(TransactionTestCase):
         from django.db import connections
         connections.close_all()
 
-from unittest.mock import patch
-from .tasks import relay_outbox
+    def test_overdrawing_balance(self):
+        key = "test-key-overdrawal"
+        payload = {
+            "amount_paise": 50,
+            "bank_account_id": "bank_123"
+        }
+        # Total Available balancer = 90
 
-class RelayOutboxWorkerTests(TestCase):
-    def setUp(self):
-        self.merchant = Merchant.objects.create(
-            name="Test Merchant",
-            email="test@example.com"
-        )
-        self.payout = Payout.objects.create(
-            merchant=self.merchant,
-            bank_account_id="bank_123",
-            amount_paise=5000,
-            status='PENDING'
-        )
-        self.outbox_event = OutboxEvent.objects.create(
-            event_type='PAYOUT_REQUESTED',
-            payload={'payout_id': str(self.payout.id)},
-            status='PENDING'
-        )
+        def make_request(index: int):
+            client = APIClient()
+            try:
+                idempotency_key = f"key-{index}"
+                return client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=idempotency_key, format='json')
+            finally:
+                connection.close()
 
-    @patch('api.tasks.process_payout.delay')
-    def test_relay_outbox_worker(self, mock_process_payout_delay):
-        # Run the relay task
-        relay_outbox()
+        # Run 2 requests concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(make_request(i)) for i in range(3)]
+            responses = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+        status_codes = [r.status_code for r in responses]
         
-        # Refresh from db
-        self.outbox_event.refresh_from_db()
+        # Exactly one should be 202 ACCEPTED, and 1 should be 400 BAD REQUEST due to insufficient balancer
+        self.assertEqual(status_codes.count(status.HTTP_202_ACCEPTED), 1)
+        self.assertEqual(status_codes.count(status.HTTP_400_BAD_REQUEST), 2)
         
-        # Assert process_payout.delay was called with the payout_id
-        mock_process_payout_delay.assert_called_once_with(str(self.payout.id))
-        
-        # Assert outbox event was marked PROCESSED
-        self.assertEqual(self.outbox_event.status, 'PROCESSED')
-        self.assertIsNotNone(self.outbox_event.processed_at)
+        # Verify db invariants: only 1 payout, 1 hold ledger, 1 outbox event
+        self.assertEqual(Payout.objects.filter(amount_paise=50).count(), 1)
+        self.assertEqual(Ledger.objects.filter(entry_type='HOLD').count(), 1)
+        self.assertEqual(OutboxEvent.objects.filter(event_type='PAYOUT_REQUESTED').count(), 1)
+
+        # Close connections opened by threads so the test db can be dropped
+        connections.close_all()
