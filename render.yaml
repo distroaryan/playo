@@ -21,14 +21,9 @@ services:
       gunicorn playto.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: playto-db
-          property: connectionString
+        sync: false 
       - key: REDIS_URL
-        fromService:
-          name: playto-redis
-          type: redis
-          property: connectionString
+        sync: false
       - key: DEFAULT_MERCHANT_ID
         value: "00000000-0000-0000-0000-000000000000"
       - key: DJANGO_SETTINGS_MODULE
@@ -45,14 +40,9 @@ services:
     startCommand: celery -A playto worker --loglevel=info --pool=solo --concurrency=1
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: playto-db
-          property: connectionString
+        sync: false 
       - key: REDIS_URL
-        fromService:
-          name: playto-redis
-          type: redis
-          property: connectionString
+        sync: false
       - key: DEFAULT_MERCHANT_ID
         value: "00000000-0000-0000-0000-000000000000"
       - key: DJANGO_SETTINGS_MODULE
@@ -69,14 +59,9 @@ services:
     startCommand: celery -A playto beat --loglevel=info
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: playto-db
-          property: connectionString
+        sync: false 
       - key: REDIS_URL
-        fromService:
-          name: playto-redis
-          type: redis
-          property: connectionString
+        sync: false
       - key: DEFAULT_MERCHANT_ID
         value: "00000000-0000-0000-0000-000000000000"
       - key: DJANGO_SETTINGS_MODULE
