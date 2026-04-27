@@ -31,13 +31,16 @@ seed: ## Seed the database with test data
 	python seed.py
 
 # ─── Celery ──────────────────────────────────────────────────
-.PHONY: celery-worker celery-beat
+.PHONY: celery-worker celery-beat flower
 
 celery-worker: ## Start Celery worker (solo pool for Windows)
 	celery -A playto worker --loglevel=info -P solo
 
 celery-beat: ## Start Celery Beat scheduler
 	celery -A playto beat --loglevel=info
+
+flower: ## Start Celery Flower monitoring dashboard (port 5555)
+	celery -A playto flower --port=5555
 
 # ─── React Frontend ──────────────────────────────────────────
 .PHONY: frontend frontend-install
@@ -51,7 +54,7 @@ frontend: ## Start the React (Vite) dev server
 # ─── Full Docker Stack ───────────────────────────────────────
 .PHONY: docker-up docker-down docker-build docker-logs
 
-docker-up: ## Start all 6 containers (full stack)
+docker-up: ## Start all 7 containers (full stack)
 	docker compose up -d
 
 docker-down: ## Stop all containers

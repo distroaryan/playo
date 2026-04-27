@@ -1,45 +1,32 @@
-# ── Stage 1: Build ───────────────────────────────────────────
-FROM python:3.12-slim AS builder
+# ── Base Image ────────────────────────────────────────────────
+FROM python:3.12-slim
 
+# ── Environment ───────────────────────────────────────────────
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# ── Working Directory ─────────────────────────────────────────
 WORKDIR /app
 
+# ── System Dependencies ───────────────────────────────────────
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libpq-dev \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/
-
-# Install into a virtual env so we can copy it cleanly to the final stage
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# ── Install Python Dependencies ───────────────────────────────
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-       --ignore-installed pywin32 2>/dev/null || true
+    && pip install --no-cache-dir -r requirements.txt
 
-# ── Stage 2: Runtime ─────────────────────────────────────────
-FROM python:3.12-slim AS runtime
+# ── Copy Project ──────────────────────────────────────────────
+COPY . .
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /app
-
-# Only the runtime C lib needed by psycopg2
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the pre-built venv from the builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy application code
-COPY . /app/
-
+# ── Expose Port ───────────────────────────────────────────────
 EXPOSE 8000
 
+# ── Default Command ───────────────────────────────────────────
 CMD ["gunicorn", "playto.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]

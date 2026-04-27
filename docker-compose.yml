@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────
-# Playto — Full-Stack Docker Compose (6 containers)
+# Playto — Full-Stack Docker Compose (7 containers)
 # Usage: docker compose up -d
 # ──────────────────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ services:
     container_name: playto-backend
     command: >
       sh -c "python manage.py migrate --noinput &&
+             python seed.py &&
              gunicorn playto.wsgi:application --bind 0.0.0.0:8000 --workers 3"
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
@@ -107,6 +108,28 @@ services:
       backend:
         condition: service_started
 
+  # ─── Celery Flower (Monitoring Dashboard) ────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: playto-flower
+    command: celery -A playto flower --port=5555
+    environment:
+      DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
+      REDIS_URL: redis://redis:6379/0
+      DEFAULT_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
+      DJANGO_SETTINGS_MODULE: playto.settings
+    ports:
+      - "5555:5555"
+    networks:
+      - playto-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery-worker:
+        condition: service_started
+
   # ─── React Frontend (Vite) ──────────────────────────────────
   frontend:
     build:
@@ -128,3 +151,4 @@ networks:
 # ─── Persistent Volumes ─────────────────────────────────────────
 volumes:
   postgres_data:
+

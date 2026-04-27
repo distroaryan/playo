@@ -1,5 +1,5 @@
 import uuid
-from django.test import TransactionTestCase, TestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
