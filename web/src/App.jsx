@@ -2,7 +2,59 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
 const API_BASE = 'http://localhost:8000'
-const MERCHANT_ID = import.meta.env.VITE_MERCHANT_ID || ''
+const MERCHANT_ID = import.meta.env.VITE_MERCHANT_ID || '00000000-0000-0000-0000-000000000000'
+
+/* ── Inline SVG Icons ─────────────────────── */
+const Icons = {
+  logo: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+    </svg>
+  ),
+  send: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="M22 2L11 13" />
+      <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+    </svg>
+  ),
+  list: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+    </svg>
+  ),
+  refresh: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="M23 4v6h-6" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  ),
+  check: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  ),
+  alert: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+  ),
+  inbox: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+      <path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z" />
+    </svg>
+  ),
+  arrowUp: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <line x1="12" y1="19" x2="12" y2="5" />
+      <polyline points="5 12 12 5 19 12" />
+    </svg>
+  ),
+}
 
 function App() {
   const [tab, setTab] = useState('payout')
@@ -117,108 +169,189 @@ function App() {
     })
   }
 
+  /* ── Computed Stats ─────────────────────── */
+  const totalEntries = ledger.length
+  const holdCount = ledger.filter((e) => e.entry_type === 'HOLD').length
+  const netBalance = ledger.reduce((sum, e) => sum + e.amount_paise, 0)
+
   return (
     <div className="dashboard">
+      {/* ── Header ─────────────────────────── */}
       <header className="header">
-        <h1>Playto Payout Engine</h1>
-        <p>Dashboard for managing payouts and viewing ledger entries</p>
+        <div className="header-brand">
+          <div className="header-icon">{Icons.logo}</div>
+          <h1>Playto Payout Engine</h1>
+        </div>
+        <p>Real-time dashboard for managing payouts and tracking ledger entries</p>
       </header>
 
+      {/* ── Stats Bar ──────────────────────── */}
+      <div className="stats-bar">
+        <div className="stat-card">
+          <div className="stat-label">Ledger Entries</div>
+          <div className="stat-value accent">{totalEntries}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Pending Holds</div>
+          <div className="stat-value" style={{ color: holdCount > 0 ? 'var(--hold-color)' : 'var(--text-heading)' }}>
+            {holdCount}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Net Balance</div>
+          <div className={`stat-value ${netBalance >= 0 ? 'positive' : 'negative'}`}>
+            ₹{(Math.abs(netBalance) / 100).toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Tabs ───────────────────────────── */}
       <div className="tabs">
         <button
           className={`tab ${tab === 'payout' ? 'active' : ''}`}
           onClick={() => setTab('payout')}
+          id="tab-payout"
         >
+          <span className="tab-icon">{Icons.send}</span>
           Request Payout
         </button>
         <button
           className={`tab ${tab === 'ledger' ? 'active' : ''}`}
           onClick={() => { setTab('ledger'); fetchLedger(); }}
+          id="tab-ledger"
         >
+          <span className="tab-icon">{Icons.list}</span>
           Ledger
         </button>
       </div>
 
+      {/* ── Payout Form ────────────────────── */}
       {tab === 'payout' && (
-        <form className="payout-form" onSubmit={handleSubmit}>
-          <h2>New Payout Request</h2>
-          <div className="form-group">
-            <label htmlFor="bankAccountId">Bank Account ID</label>
-            <input
-              id="bankAccountId"
-              type="text"
-              placeholder="e.g. bank_acc_12345"
-              value={bankAccountId}
-              onChange={(e) => setBankAccountId(e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="amountPaise">Amount (Paise)</label>
-            <input
-              id="amountPaise"
-              type="number"
-              min="1"
-              placeholder="e.g. 5000 (= ₹50.00)"
-              value={amountPaise}
-              onChange={(e) => setAmountPaise(e.target.value)}
-              required
-            />
-          </div>
-          <button className="submit-btn" type="submit" disabled={submitting}>
-            {submitting ? 'Submitting...' : 'Submit Payout'}
-          </button>
+        <form className="payout-form" onSubmit={handleSubmit} id="payout-form">
+          <h2>
+            {Icons.arrowUp}
+            New Payout Request
+          </h2>
+          <p className="form-subtitle">
+            Enter the bank account and amount to initiate a payout transfer.
+          </p>
 
-          {statusMsg && (
-            <div className={`status-message ${statusMsg.type}`}>
-              {statusMsg.text}
+          <div className="form-fields">
+            <div className="form-group">
+              <label htmlFor="bankAccountId">Bank Account ID</label>
+              <input
+                id="bankAccountId"
+                type="text"
+                placeholder="e.g. bank_acc_12345"
+                value={bankAccountId}
+                onChange={(e) => setBankAccountId(e.target.value)}
+                required
+              />
             </div>
-          )}
+            <div className="form-group">
+              <label htmlFor="amountPaise">Amount (Paise)</label>
+              <input
+                id="amountPaise"
+                type="number"
+                min="1"
+                placeholder="e.g. 5000 (= ₹50.00)"
+                value={amountPaise}
+                onChange={(e) => setAmountPaise(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <div className="form-actions">
+            <button className="submit-btn" type="submit" disabled={submitting} id="submit-payout">
+              {submitting ? (
+                <>
+                  <span className="spinner" />
+                  Processing…
+                </>
+              ) : (
+                <>
+                  {Icons.send}
+                  Submit Payout
+                </>
+              )}
+            </button>
+
+            {statusMsg && (
+              <div className={`status-message ${statusMsg.type}`} id="status-message">
+                <span className="status-icon">
+                  {statusMsg.type === 'success' ? Icons.check : Icons.alert}
+                </span>
+                {statusMsg.text}
+              </div>
+            )}
+          </div>
         </form>
       )}
 
+      {/* ── Ledger View ────────────────────── */}
       {tab === 'ledger' && (
         <div className="ledger-section">
-          <h2>
-            Ledger Entries
-            {polling && <span className="polling-badge">POLLING</span>}
-          </h2>
+          <div className="ledger-header">
+            <h2>
+              Ledger Entries
+              {polling && (
+                <span className="polling-badge">
+                  <span className="polling-dot" />
+                  LIVE
+                </span>
+              )}
+            </h2>
+            <button className="refresh-btn" onClick={fetchLedger} type="button" id="refresh-ledger">
+              {Icons.refresh}
+              Refresh
+            </button>
+          </div>
 
           {ledger.length === 0 ? (
-            <div className="empty-state">
-              <p>No ledger entries yet.{!MERCHANT_ID && ' Set VITE_MERCHANT_ID in your .env file.'}</p>
+            <div className="empty-state" id="empty-state">
+              <div className="empty-state-icon">{Icons.inbox}</div>
+              <p>No ledger entries yet</p>
+              <p className="hint">
+                {!MERCHANT_ID
+                  ? 'Set VITE_MERCHANT_ID in your .env file to get started.'
+                  : 'Submit a payout to see entries appear here.'}
+              </p>
             </div>
           ) : (
-            <table className="ledger-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Amount</th>
-                  <th>Payout ID</th>
-                  <th>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ledger.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>
-                      <span className={`badge ${entry.entry_type.toLowerCase()}`}>
-                        {entry.entry_type}
-                      </span>
-                    </td>
-                    <td className={entry.amount_paise >= 0 ? 'amount-positive' : 'amount-negative'}>
-                      {formatAmount(entry.amount_paise)}
-                    </td>
-                    <td style={{ color: 'var(--text-muted)', fontSize: '13px', fontFamily: 'monospace' }}>
-                      {entry.payout_id ? entry.payout_id.slice(0, 8) + '…' : '—'}
-                    </td>
-                    <td style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                      {formatDate(entry.created_at)}
-                    </td>
+            <div className="ledger-table-wrapper">
+              <table className="ledger-table" id="ledger-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Payout ID</th>
+                    <th>Date</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {ledger.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>
+                        <span className={`badge ${entry.entry_type.toLowerCase()}`}>
+                          <span className="badge-dot" />
+                          {entry.entry_type}
+                        </span>
+                      </td>
+                      <td className={entry.amount_paise >= 0 ? 'amount-positive' : 'amount-negative'}>
+                        {formatAmount(entry.amount_paise)}
+                      </td>
+                      <td className="payout-id-cell">
+                        {entry.payout_id ? entry.payout_id.slice(0, 8) + '…' : '—'}
+                      </td>
+                      <td className="date-cell">
+                        {formatDate(entry.created_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

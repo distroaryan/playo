@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+db.sqlite3
+node_modules/
+web/node_modules/
+web/dist/
+*.md
+assets/
+docker-compose*.yml
+Makefile
+render.yaml

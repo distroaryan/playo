@@ -1,0 +1,92 @@
+# ──────────────────────────────────────────────────────────────
+# Render Blueprint — Playto Payout Engine
+# Deploys: Django API + Celery Worker
+# ──────────────────────────────────────────────────────────────
+
+databases:
+  - name: playto-db
+    plan: free
+    databaseName: playto_db
+    user: playto_user
+
+services:
+  # ─── Django API Server ─────────────────────────────────────
+  - type: web
+    name: playto-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      python manage.py migrate --noinput &&
+      gunicorn playto.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: playto-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: playto-redis
+          type: redis
+          property: connectionString
+      - key: DEFAULT_MERCHANT_ID
+        value: "00000000-0000-0000-0000-000000000000"
+      - key: DJANGO_SETTINGS_MODULE
+        value: playto.settings
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+  # ─── Celery Worker (Background Jobs) ──────────────────────
+  - type: worker
+    name: playto-celery-worker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A playto worker --loglevel=info --pool=solo --concurrency=1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: playto-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: playto-redis
+          type: redis
+          property: connectionString
+      - key: DEFAULT_MERCHANT_ID
+        value: "00000000-0000-0000-0000-000000000000"
+      - key: DJANGO_SETTINGS_MODULE
+        value: playto.settings
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+  # ─── Celery Beat (Scheduler) ──────────────────────────────
+  - type: worker
+    name: playto-celery-beat
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A playto beat --loglevel=info
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: playto-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: playto-redis
+          type: redis
+          property: connectionString
+      - key: DEFAULT_MERCHANT_ID
+        value: "00000000-0000-0000-0000-000000000000"
+      - key: DJANGO_SETTINGS_MODULE
+        value: playto.settings
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+  # ─── Redis (Celery Broker) ────────────────────────────────
+  - type: redis
+    name: playto-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []  # only allow internal connections

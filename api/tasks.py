@@ -9,6 +9,7 @@ import json
 import redis
 from celery.exceptions import SoftTimeLimitExceeded
 from .models import OutboxEvent, Payout, Ledger
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,9 @@ def process_payout(self, payout_id):
 
         # 2. Simulation Logic
         rand_val = random.random()
+
+        # Fake timeout to relax n chill
+        time.sleep(5)
         
         if rand_val < 0.70:
             # SUCCESS path
@@ -90,15 +94,16 @@ def process_payout(self, payout_id):
                 payout.status = 'SUCCESS'
                 payout.save(update_fields=['status', 'updated_at'])
 
-                # Write DEBIT to finalize
-                Ledger.objects.create(
-                    merchant=payout.merchant,
+                # Update DEBIT to finalize
+                # Why we are not creating a new Ledger? 
+                # Ans: Because creating a new entry can cause a race conditions, updation is subject to row level locks
+                Ledger.objects.filter(
+                    payout=payout,
+                    entry_type='HOLD',
+                ).update(
                     entry_type='DEBIT',
-                    amount_paise=-payout.amount_paise,
-                    payout=payout
+                    amount_paise=-payout.amount_paise
                 )
-                # Delete HOLD row
-                Ledger.objects.filter(payout=payout, entry_type='HOLD').delete()
 
             # Update Redis idempotency key with the final response
             _update_redis_idempotency(payout)
@@ -146,11 +151,12 @@ def relay_outbox():
     Uses select_for_update(skip_locked=True) to ensure exactly-once
     processing across multiple workers.
     """
-    events = OutboxEvent.objects.select_for_update(skip_locked=True).filter(
-        status='PENDING'
-    ).order_by('created_at')[:10]
 
     with transaction.atomic():
+        events = OutboxEvent.objects.select_for_update(skip_locked=True).filter(
+            status='PENDING'
+        ).order_by('created_at')[:10]
+        
         # Evaluate queryset inside the atomic block
         for event in events:
             try:

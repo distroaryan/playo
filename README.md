@@ -2,9 +2,13 @@
 
 A payment engine simulation designed with robust financial systems in mind, built using Django, DRF, PostgreSQL, Celery, and Redis. It features exact-once processing, Redis-based atomic idempotency using Lua scripts, strict row-level locking for balance management, and a transactional outbox pattern to guarantee event delivery.
 
+---
+
 ## Architecture Overview
 
 The system is designed to handle high concurrency without race conditions, overdrawn accounts, or duplicate processing.
+
+![Playto Architecture Diagram](assets/architecture_diagram.png)
 
 ### Client → Backend Request Flow
 
@@ -127,59 +131,128 @@ stateDiagram-v2
 
 ---
 
-## Setup Instructions
+## Docker Containers
 
-1. Ensure Docker and Docker Compose are installed on your machine for the backing services.
-2. Start the infrastructure (PostgreSQL and Redis):
-   ```bash
-   docker-compose up -d
-   ```
-3. Activate the virtual environment:
-   ```bash
-   .\.venv\Scripts\activate
-   ```
-4. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-5. Run database migrations:
-   ```bash
-   python manage.py migrate
-   ```
+The full stack runs as **6 containers** via `docker-compose.yml`:
 
-## Starting the Application
+| Container          | Image / Build          | Port  | Purpose                          |
+|--------------------|------------------------|-------|----------------------------------|
+| `playto-postgres`  | `postgres:15`          | 5432  | Primary database                 |
+| `playto-redis`     | `redis:7-alpine`       | 6379  | Celery broker + idempotency gate |
+| `playto-backend`   | `./Dockerfile`         | 8000  | Django API (Gunicorn)            |
+| `playto-celery-worker` | `./Dockerfile`     | —     | Payout processing worker         |
+| `playto-celery-beat`   | `./Dockerfile`     | —     | Periodic outbox relay scheduler  |
+| `playto-frontend`  | `./web/Dockerfile`     | 5173  | React dashboard (Vite)           |
 
-To run the full stack locally, you will need 4 separate terminal windows.
-
-**Terminal 1: Django API Server**
+### Start all containers
 ```bash
-python manage.py runserver
+docker compose up -d
 ```
 
-**Terminal 2: Celery Worker (Payout Processing)**
+### Stop all containers
 ```bash
-celery -A playto worker --loglevel=info -P solo
+docker compose down
 ```
 
-**Terminal 3: Celery Beat (Outbox Relay Watcher)**
+---
+
+## Local Development Setup
+
+For local development, only PostgreSQL and Redis run in Docker. The Django server, Celery, and the frontend run natively.
+
+### Prerequisites
+- Docker & Docker Compose
+- Python 3.11+ with a virtual environment
+- Node.js 20+
+- GNU Make (or use the commands directly)
+
+### 1. Start Databases
 ```bash
-celery -A playto beat --loglevel=info
+make db-start
 ```
 
-**Terminal 4: React Dashboard (Frontend)**
+### 2. Activate Virtual Environment & Install Dependencies
 ```bash
-cd web
-npm install
-npm run dev
+# Windows
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+
+# macOS/Linux
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+### 3. Run Migrations & Seed Data
+```bash
+make migrate
+make seed
+```
+
+### 4. Start Services (each in a separate terminal)
+
+| Terminal | Command           | Description                  |
+|----------|-------------------|------------------------------|
+| 1        | `make server`     | Django API on `localhost:8000` |
+| 2        | `make celery-worker` | Celery worker (solo pool)  |
+| 3        | `make celery-beat`   | Celery Beat scheduler      |
+| 4        | `make frontend`      | Vite dev server on `localhost:5173` |
+
 Create a `.env` file inside `web/` with your merchant UUID:
 ```
 VITE_MERCHANT_ID=<your-merchant-uuid>
 ```
-The dashboard will be available at `http://localhost:5173`.
+
+---
+
+## Makefile Commands Reference
+
+### Database Services
+| Command         | Description                                        |
+|-----------------|----------------------------------------------------|
+| `make db-start` | Start PostgreSQL and Redis containers (detached)   |
+| `make db-stop`  | Stop PostgreSQL and Redis containers               |
+| `make db-logs`  | Tail logs from database containers                 |
+
+### Django Backend
+| Command        | Description                      |
+|----------------|----------------------------------|
+| `make server`  | Start the Django development server |
+| `make migrate` | Run Django database migrations   |
+| `make seed`    | Seed the database with test data |
+
+### Celery
+| Command              | Description                             |
+|----------------------|-----------------------------------------|
+| `make celery-worker` | Start Celery worker (solo pool for Windows) |
+| `make celery-beat`   | Start Celery Beat scheduler             |
+
+### React Frontend
+| Command                 | Description                    |
+|-------------------------|--------------------------------|
+| `make frontend-install` | Install frontend npm dependencies |
+| `make frontend`         | Start the Vite dev server      |
+
+### Full Docker Stack
+| Command            | Description                    |
+|--------------------|--------------------------------|
+| `make docker-up`   | Start all 6 containers         |
+| `make docker-down` | Stop all containers            |
+| `make docker-build`| Rebuild all Docker images       |
+| `make docker-logs` | Tail logs from all containers  |
+
+### Utilities
+| Command       | Description                              |
+|---------------|------------------------------------------|
+| `make test`   | Run Django test suite                    |
+| `make clean`  | Remove Docker volumes and stopped containers |
+| `make help`   | Show all available commands              |
+
+---
 
 ## Running Tests
 Run the test suite using `testcontainers` to automatically spin up an isolated PostgreSQL instance:
 ```bash
+make test
+# or directly:
 python manage.py test api
 ```

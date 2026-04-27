@@ -3,7 +3,6 @@
 ## 1. The Ledger
 
 **Question:** How is the balance calculated?
-**Answer:**
 ```python
 balance = Ledger.objects.filter(merchant=merchant).aggregate(
     total=Sum('amount_paise')
@@ -11,21 +10,21 @@ balance = Ledger.objects.filter(merchant=merchant).aggregate(
 ```
 
 **Question:** Why model credits and debits this way?
+
 **Answer:**
 We avoid storing a mutable `balance` integer directly on the `Merchant` table because an update in a single value introduces race conditions and makes it complex to handle safely across concurrent requests.
 
-To solve the race condition, we model the balance as a `Ledger` of immutable `CREDIT`, `HOLD`, and `DEBIT` entries. The current balance is mathematically derived from the sum of all entries.
+To solve the race condition, we model the balance as a `Ledger` of `CREDIT`, `HOLD`, and `DEBIT` entries. The current balance is mathematically derived from the sum of all entries.
 
 - When a payout is requested, a negative `HOLD` entry immediately reduces the calculated balance. 
 - If the payout fails, the `HOLD` is simply deleted (or compensated), seamlessly returning the funds to the available balance without complex math.
-- If the payout succeeds, the `HOLD` entry is deleted and a new `DEBIT` entry is written.
+- If the payout succeeds, the `HOLD` entry is updated to a new `DEBIT` entry. We avoid creating a new entry because using this approach, we can use row level locks to deal with the race conditions
 
 Using this method, we avoid race conditions and use database aggregation to compute the balance instead of relying on application-level arithmetic operations.
 
 ## 2. The Lock
 
 **Question:** How do we safely lock the merchant balance during a transaction?
-**Answer:**
 ```python
 with transaction.atomic():
     merchant = Merchant.objects.select_for_update().get(id=merchant_id)
@@ -91,8 +90,9 @@ def test_overdrawing_balance(self):
 ## 3. The Idempotency
 
 **Question:** How does the system know it has seen a key before?
+
 **Answer:** 
-Clients are required to send an `Idempotency-Key` HTTP header. Idempotency is enforced entirely through **Redis** using an atomic **Lua Script**. There is no `IdempotencyKey` table in PostgreSQL — Redis is the sole gate.
+Clients are required to send an `Idempotency-Key` HTTP header. Idempotency is enforced through **Redis** using an atomic **Lua Script** to handle deduplication
 
 A Redis key has three possible states:
 
