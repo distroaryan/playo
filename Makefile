@@ -67,10 +67,13 @@ docker-logs: ## Tail logs from all containers
 	docker compose logs -f
 
 # ─── Utilities ───────────────────────────────────────────────
-.PHONY: test clean help
+.PHONY: test test-load clean help
 
 test: ## Run Django test suite
 	python manage.py test api
+
+test-load: ## Run k6 load test for throughput and latency evaluation
+	k6 run k6_load_test.js
 
 clean: ## Remove Docker volumes and stopped containers
 	docker compose down -v

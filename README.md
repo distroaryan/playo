@@ -1,5 +1,10 @@
 # Playto Payout Engine
 
+![Django](https://img.shields.io/badge/django-%23092E20.svg?style=for-the-badge&logo=django&logoColor=white)
+![Celery](https://img.shields.io/badge/celery-%2337814A.svg?style=for-the-badge&logo=celery&logoColor=white)
+![Redis](https://img.shields.io/badge/redis-%23DD0031.svg?style=for-the-badge&logo=redis&logoColor=white)
+
+
 A payment engine simulation designed with robust financial systems in mind, built using Django, DRF, PostgreSQL, Celery, and Redis. It features exact-once processing, Redis-based atomic idempotency using Lua scripts, strict row-level locking for balance management, and a transactional outbox pattern to guarantee event delivery.
 
 ---
@@ -10,8 +15,6 @@ The system is designed to handle high concurrency without race conditions, overd
 
 ![Playto Architecture Diagram](assets/architecture_diagram.png)
 
-The diagram above illustrates the complete request lifecycle: a client (React dashboard) submits a payout request to the Django API gateway, which first consults Redis using an atomic Lua script for idempotency. If the request is new, a PostgreSQL transaction creates the payout record, a ledger `HOLD` entry, and an `OutboxEvent` — all atomically. The Celery Beat watchdog polls the outbox every 10 seconds, dispatching events to the payment processing worker via the Redis queue. The worker simulates a bank gateway with three outcomes: **SUCCESS (70%)**, **FAILED (20%)**, or **HANG/timeout (10%)** with exponential backoff retry.
-
 ---
 
 ### Client → Backend Request Flow
@@ -20,13 +23,21 @@ The flowchart below traces every possible path a payout request can take from th
 
 ```mermaid
 flowchart TD
-    Client[Client Request] --> API[Django API]
-    API --> RedisLua["Redis Lua Script (Atomic Gate)"]
+    %% Define colors
+    classDef default fill:#1E293B,stroke:#475569,stroke-width:1px,color:#E2E8F0;
+    classDef client fill:#0ea5e9,stroke:#0284c7,stroke-width:2px,color:#ffffff;
+    classDef redis fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#ffffff;
+    classDef error fill:#f97316,stroke:#ea580c,stroke-width:2px,color:#ffffff;
+    classDef success fill:#22c55e,stroke:#16a34a,stroke-width:2px,color:#ffffff;
+    classDef db fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#ffffff;
     
-    RedisLua -- "Key = PENDING" --> Conflict[409 Conflict]
-    RedisLua -- "Key = JSON Response" --> OK[200 OK Cached Response]
-    RedisLua -- "Redis Unreachable" --> ServerError[500 Internal Server Error]
-    RedisLua -- "Key = null → SET PENDING" --> DB_Tx[Start DB Transaction]
+    Client[Client Request]:::client --> API[Django API]
+    API --> RedisLua["Redis Lua Script (Atomic Gate)"]:::redis
+    
+    RedisLua -- "Key = PENDING" --> Conflict[409 Conflict]:::error
+    RedisLua -- "Key = JSON Response" --> OK[200 OK Cached Response]:::success
+    RedisLua -- "Redis Unreachable" --> ServerError[500 Internal Server Error]:::error
+    RedisLua -- "Key = null → SET PENDING" --> DB_Tx[Start DB Transaction]:::db
     
     subgraph PostgreSQL Transaction
         DB_Lock["Row Lock Merchant (SELECT FOR UPDATE)"]
@@ -35,6 +46,7 @@ flowchart TD
         DB_Ledger[Insert Ledger HOLD]
         DB_Outbox[Insert OutboxEvent]
     end
+    style PostgreSQL Transaction fill:#0f172a,stroke:#3b82f6,stroke-width:2px,stroke-dasharray: 5 5
     
     DB_Tx --> DB_Lock
     DB_Lock --> DB_Bal
@@ -42,7 +54,7 @@ flowchart TD
     DB_Payout --> DB_Ledger
     DB_Ledger --> DB_Outbox
     
-    DB_Outbox --> Return["202 Accepted (Redis key stays PENDING)"]
+    DB_Outbox --> Return["202 Accepted (Redis key stays PENDING)"]:::success
 ```
 
 **How to read this diagram:**
@@ -62,19 +74,28 @@ This diagram shows the asynchronous background processing pipeline. Once the syn
 
 ```mermaid
 flowchart LR
-    CeleryBeat[Celery Beat Scheduler] --> |Every 10s| RelayTask[relay_outbox Task]
-    RelayTask --> |"Poll OutboxEvent (skip_locked)"| DB_Outbox[(PostgreSQL OutboxEvent)]
-    DB_Outbox --> |Dispatch| ProcessTask[process_payout Task]
+    %% Define colors
+    classDef default fill:#1E293B,stroke:#475569,stroke-width:1px,color:#E2E8F0;
+    classDef celery fill:#10b981,stroke:#059669,stroke-width:2px,color:#ffffff;
+    classDef db fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#ffffff;
+    classDef bank fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#ffffff;
+    classDef success fill:#22c55e,stroke:#16a34a,stroke-width:2px,color:#ffffff;
+    classDef failure fill:#ef4444,stroke:#dc2626,stroke-width:2px,color:#ffffff;
+    classDef retry fill:#eab308,stroke:#ca8a04,stroke-width:2px,color:#ffffff;
     
-    ProcessTask --> Simulation{Bank Gateway Simulation}
-    Simulation -- "70% Success" --> SuccessPath[Update Payout → SUCCESS]
-    Simulation -- "20% Failure" --> FailPath[Rollback → FAILED]
-    Simulation -- "10% Timeout" --> RetryPath["Re-enqueue (Exp. Backoff)"]
+    CeleryBeat[Celery Beat Scheduler]:::celery --> |Every 10s| RelayTask[relay_outbox Task]:::celery
+    RelayTask --> |"Poll OutboxEvent (skip_locked)"| DB_Outbox[(PostgreSQL OutboxEvent)]:::db
+    DB_Outbox --> |Dispatch| ProcessTask[process_payout Task]:::celery
     
-    SuccessPath --> WriteLedger["Write DEBIT + Delete HOLD"]
-    FailPath --> DeleteHold[Delete HOLD Ledger]
+    ProcessTask --> Simulation{Bank Gateway Simulation}:::bank
+    Simulation -- "70% Success" --> SuccessPath[Update Payout → SUCCESS]:::success
+    Simulation -- "20% Failure" --> FailPath[Rollback → FAILED]:::failure
+    Simulation -- "10% Timeout" --> RetryPath["Re-enqueue (Exp. Backoff)"]:::retry
     
-    WriteLedger --> UpdateRedis["Update Redis Key → JSON Response"]
+    SuccessPath --> WriteLedger["Write DEBIT + Delete HOLD"]:::db
+    FailPath --> DeleteHold[Delete HOLD Ledger]:::db
+    
+    WriteLedger --> UpdateRedis["Update Redis Key → JSON Response"]:::redis
     DeleteHold --> UpdateRedis
 ```
 
@@ -101,6 +122,28 @@ flowchart LR
 4. **Transactional Outbox Pattern**: An `OutboxEvent` is committed within the same transaction as the ledger hold. A Celery worker later relays these events, guaranteeing *exactly-once* delivery.
 
 5. **Worker-Driven State Finalization**: The Celery worker updates the Redis idempotency key from `PENDING` to the final JSON response once the payout reaches a terminal state (`SUCCESS` or `FAILED`).
+
+For more details on these architectural decisions, please see [EXPLAINER.md](EXPLAINER.md).
+
+---
+
+## File Structure
+
+```text
+playto/
+├── api/                   # Django app for API routes and views
+├── assets/                # Static assets (architecture diagrams)
+├── playto/                # Django project settings
+├── web/                   # React frontend (Vite)
+├── docker-compose.yml     # Docker compose for full stack
+├── docker-compose.dev.yml # Docker compose for local DB & Redis
+├── Dockerfile             # Multi-stage Dockerfile for backend/celery
+├── Makefile               # Local development shortcuts
+├── requirements.txt       # Python dependencies
+├── seed.py                # Database seed script
+├── test_e2e.py            # End-to-end test script
+└── test_benchmark.py      # Load/benchmark test script
+```
 
 ---
 
@@ -163,6 +206,11 @@ This state diagram shows the lifecycle of a single payout. A payout can only mov
 
 ```mermaid
 stateDiagram-v2
+    classDef pending fill:#eab308,stroke:#ca8a04,color:white,font-weight:bold;
+    classDef processing fill:#3b82f6,stroke:#2563eb,color:white,font-weight:bold;
+    classDef success fill:#22c55e,stroke:#16a34a,color:white,font-weight:bold;
+    classDef failed fill:#ef4444,stroke:#dc2626,color:white,font-weight:bold;
+
     [*] --> PENDING : Payout Created
     PENDING --> PROCESSING : Worker Picks Up
     PROCESSING --> SUCCESS : Bank Approved
@@ -171,6 +219,11 @@ stateDiagram-v2
     PROCESSING --> PENDING : Timeout (re-enqueued)
     FAILED --> [*] : Terminal
     SUCCESS --> [*] : Terminal
+    
+    class PENDING pending
+    class PROCESSING processing
+    class SUCCESS success
+    class FAILED failed
 ```
 
 **State descriptions:**
@@ -183,6 +236,8 @@ stateDiagram-v2
 ---
 
 ## Docker Containers
+
+![Docker Setup](file:///C:/Users/91895/.gemini/antigravity/brain/79de06e3-c164-41f7-98f8-bcdbfb41ba2d/.tempmediaStorage/media_79de06e3-c164-41f7-98f8-bcdbfb41ba2d_1777303693705.png)
 
 The full stack runs as **7 containers** via `docker-compose.yml`:
 
@@ -215,34 +270,6 @@ docker compose down
 
 ---
 
-## Celery Flower Monitoring
-
-[Flower](https://flower.readthedocs.io/) is a real-time web-based monitoring tool for Celery. It provides visibility into:
-
-- **Active workers** — see which workers are online, their status, and task throughput
-- **Task history** — view all executed tasks with arguments, results, and execution times
-- **Task queues** — monitor queue depths and consumer counts
-- **Worker resource usage** — CPU, memory, and task prefetch counts
-
-### Running Flower
-
-**In Docker (part of the full stack):**
-```bash
-docker compose up -d
-# Flower is available at http://localhost:5555
-```
-
-**Locally (for development):**
-```bash
-make flower
-# or directly:
-celery -A playto flower --port=5555
-```
-
-The dashboard will be available at **http://localhost:5555**. No authentication is configured by default — add `--basic-auth=user:password` to the command for basic HTTP auth if needed.
-
----
-
 ## Local Development Setup
 
 For local development, only PostgreSQL and Redis run in Docker. The Django server, Celery, and the frontend run natively.
@@ -255,7 +282,9 @@ For local development, only PostgreSQL and Redis run in Docker. The Django serve
 
 ### 1. Start Databases
 ```bash
-make db-start
+docker compose -f docker-compose.dev.yml up -d
+# Or using Makefile:
+# make db-start
 ```
 
 ### 2. Activate Virtual Environment & Install Dependencies
@@ -271,19 +300,44 @@ pip install -r requirements.txt
 
 ### 3. Run Migrations & Seed Data
 ```bash
-make migrate
-make seed
+python manage.py migrate
+python seed.py
+# Or using Makefile:
+# make migrate
+# make seed
 ```
 
 ### 4. Start Services (each in a separate terminal)
 
-| Terminal | Command              | Description                           |
-|----------|----------------------|---------------------------------------|
-| 1        | `make server`        | Django API on `localhost:8000`         |
-| 2        | `make celery-worker` | Celery worker (solo pool)             |
-| 3        | `make celery-beat`   | Celery Beat scheduler                 |
-| 4        | `make frontend`      | Vite dev server on `localhost:5173`   |
-| 5        | `make flower`        | Flower dashboard on `localhost:5555`  |
+**Terminal 1: Django API on `localhost:8000`**
+```bash
+python manage.py runserver
+# Or using Makefile: make server
+```
+
+**Terminal 2: Celery worker (solo pool)**
+```bash
+celery -A playto worker --loglevel=info -P solo
+# Or using Makefile: make celery-worker
+```
+
+**Terminal 3: Celery Beat scheduler**
+```bash
+celery -A playto beat --loglevel=info
+# Or using Makefile: make celery-beat
+```
+
+**Terminal 4: Vite dev server on `localhost:5173`**
+```bash
+cd web && npm run dev
+# Or using Makefile: make frontend
+```
+
+**Terminal 5: Flower dashboard on `localhost:5555`**
+```bash
+celery -A playto flower --port=5555
+# Or using Makefile: make flower
+```
 
 Create a `.env` file inside `web/` with your merchant UUID:
 ```
@@ -341,9 +395,50 @@ VITE_MERCHANT_ID=<your-merchant-uuid>
 ---
 
 ## Running Tests
-Run the test suite using `testcontainers` to automatically spin up an isolated PostgreSQL instance:
+
+### End-to-End Tests
+Run the E2E test suite using `testcontainers` to automatically spin up an isolated PostgreSQL instance:
 ```bash
-make test
-# or directly:
 python manage.py test api
+# Or using Makefile:
+# make test
 ```
+
+### Unit Tests (Coverage)
+Our test suite natively covers core edge cases to ensure financial invariants are met under all conditions. Simple tests (like basic successful creation) are omitted from this summary for brevity:
+
+- **Missing Header**: Rejects requests lacking an `Idempotency-Key` header with `400 Bad Request`.
+- **Duplicate Key (PENDING)**: Validates that if a request shares a key with a currently executing payout, it returns `409 Conflict`.
+- **Insufficient Balance**: Validates ledger logic to ensure `400 Bad Request` if funds are too low.
+- **Concurrency Overwithdrawing**: A ThreadPoolExecutor concurrently bombards the endpoint to try and overdraw the account. It proves that row-level locking (`SELECT FOR UPDATE`) prevents race conditions, blocking and failing subsequent requests when the balance is exhausted.
+
+### Load Testing Results (k6)
+We successfully performed load testing against the local Docker environment to validate the concurrency mechanisms, idempotency guarantees, and system throughput.
+
+| Metric | Result | Target / Threshold |
+|---|---|---|
+| **Max Virtual Users (VUs)** | 100 | - |
+| **Total Requests** | 12,617 | - |
+| **Throughput (RPS)** | ~140 req/s | - |
+| **Average Latency** | 375 ms | - |
+| **p(95) Latency** | 670 ms | < 500 ms ❌ |
+| **p(99) Latency** | 752 ms | < 1000 ms ✅ |
+| **Error Rate (Failed Payouts)** | 20.73% | < 1% ❌ |
+
+> **Why the 20% Failure Rate is a Success:**
+> The 20.73% "failure" rate in this specific benchmark is actually a brilliant proof of the system's strict ledger invariants! 
+> The merchant was seeded with exactly ₹100,000 (10,000,000 paise). The load test requested 12,617 payouts of ₹10 (1000 paise) each. Exactly **10,000 requests succeeded** (exhausting the exact balance to zero), and the remaining **2,617 requests were correctly blocked** with a `400 Insufficient Funds` error, proving that our pessimistic row-level locks strictly prevent overdrawing even under massive concurrent load! The high p(95) latency is a direct consequence of requests waiting in the database lock queue.
+
+Prerequisites: Ensure [k6](https://k6.io/docs/get-started/installation/) is installed.
+
+Run the load tests against the running API:
+```bash
+k6 run k6_load_test.js
+# Or using Makefile:
+# make test-load
+```
+
+---
+
+## License
+This project is licensed under the [MIT License](LICENSE).

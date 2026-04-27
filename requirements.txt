@@ -15,6 +15,7 @@ django_celery_results==2.6.0
 djangorestframework==3.17.1
 docker==7.1.0
 flower==2.0.1
+gunicorn==21.2.0
 humanize==4.15.0
 idna==3.13
 kombu==5.6.2
