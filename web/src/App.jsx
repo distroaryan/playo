@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
 const API_BASE = 'http://localhost:8000'
-const MERCHANT_ID = import.meta.env.VITE_MERCHANT_ID || '00000000-0000-0000-0000-000000000000'
 
 /* ── Inline SVG Icons ─────────────────────── */
 const Icons = {
@@ -54,12 +53,22 @@ const Icons = {
       <polyline points="5 12 12 5 19 12" />
     </svg>
   ),
+  logout: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" width="16" height="16">
+      <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  )
 }
 
 import AuthScreen from './components/AuthScreen'
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [token, setToken] = useState(localStorage.getItem('token'))
+  const [merchantId, setMerchantId] = useState(localStorage.getItem('merchant_id'))
+  const isAuthenticated = !!token
+
   const [tab, setTab] = useState('payout')
   const [ledger, setLedger] = useState([])
   const [bankAccountId, setBankAccountId] = useState('')
@@ -69,10 +78,28 @@ function App() {
   const [polling, setPolling] = useState(false)
   const intervalRef = useRef(null)
 
+  const handleLogin = (authData) => {
+    localStorage.setItem('token', authData.access)
+    localStorage.setItem('merchant_id', authData.merchant_id)
+    setToken(authData.access)
+    setMerchantId(authData.merchant_id)
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('merchant_id')
+    setToken(null)
+    setMerchantId(null)
+  }
+
   const fetchLedger = useCallback(async () => {
-    if (!MERCHANT_ID) return
+    if (!merchantId || !token) return
     try {
-      const res = await fetch(`${API_BASE}/api/v1/merchants/${MERCHANT_ID}/ledger`)
+      const res = await fetch(`${API_BASE}/api/v1/merchants/${merchantId}/ledger`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
       if (res.ok) {
         const data = await res.json()
         setLedger(data)
@@ -82,7 +109,7 @@ function App() {
       console.error('Failed to fetch ledger:', err)
     }
     return null
-  }, [])
+  }, [merchantId, token])
 
   // Initial fetch
   useEffect(() => {
@@ -125,6 +152,7 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey,
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           amount_rupees: parseFloat(amountRupees),
@@ -186,12 +214,21 @@ function App() {
   return (
     <div className="dashboard">
       {/* ── Header ─────────────────────────── */}
-      <header className="header">
+      <header className="header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div className="header-brand">
           <div className="header-icon">{Icons.logo}</div>
-          <h1>Playto Payout Engine</h1>
+          <div>
+            <h1>Playto Payout Engine</h1>
+            <p>Real-time dashboard for managing payouts and tracking ledger entries</p>
+          </div>
         </div>
-        <p>Real-time dashboard for managing payouts and tracking ledger entries</p>
+        <button 
+          onClick={handleLogout} 
+          className="submit-btn" 
+          style={{ width: 'auto', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-card)', color: 'var(--text-heading)', border: '1px solid var(--border-color)' }}
+        >
+          {Icons.logout} Logout
+        </button>
       </header>
 
       {/* ── Stats Bar ──────────────────────── */}

@@ -1,4 +1,5 @@
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
@@ -11,6 +12,7 @@ import json
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
@@ -38,12 +40,13 @@ def health_check(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def create_payout(request):
     """
     Main endpoint for simulating the payment
     """
     # 1. Validate Idempotency-Key header
-    idempotency_key : str = request.headers.get('Idempotency-Key')
+    idempotency_key = request.headers.get('Idempotency-Key')
     if not idempotency_key:
         return Response(
             {"error": "Missing Idempotency-Key header"},
@@ -67,9 +70,11 @@ def create_payout(request):
 
     amount_paise = int(amount_rupees * 100)
 
-    merchant_id = getattr(settings, 'DEFAULT_MERCHANT_ID', None)
-    if not merchant_id:
-        return Response({"error": "Server configuration error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    try:
+        merchant = Merchant.objects.get(email=request.user.email)
+        merchant_id = merchant.id
+    except Merchant.DoesNotExist:
+        return Response({"error": "Merchant not found for current user."}, status=status.HTTP_403_FORBIDDEN)
 
      # 3 Redis Lua Idempotency Check
     redis_key = f"idempotency:{idempotency_key}"
@@ -157,6 +162,7 @@ def create_payout(request):
         return Response({"error": "Merchant not found"}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def list_ledger_entries(request, merchant_id):
     """
     Lists all ledger entries associated with a given merchant ID.
@@ -164,6 +170,8 @@ def list_ledger_entries(request, merchant_id):
     """
     try:
         merchant = Merchant.objects.get(id=merchant_id)
+        if merchant.email != request.user.email:
+             return Response({"error": "Unauthorized to access this ledger."}, status=status.HTTP_403_FORBIDDEN)
     except Merchant.DoesNotExist:
         return Response({"error": "Merchant not found"}, status=status.HTTP_404_NOT_FOUND)
 

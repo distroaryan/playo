@@ -10,6 +10,7 @@ import json
 from unittest.mock import patch
 from .models import Merchant, Payout, Ledger, OutboxEvent, IdempotencyKey
 from django.db import connection, connections
+from django.contrib.auth.models import User
 
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
@@ -18,11 +19,14 @@ class PayoutAPITests(TransactionTestCase):
         self.client = APIClient()
         self.url = reverse('create_payout')
         
-        # Create a test merchant
+        # Create a test user and merchant
+        self.user = User.objects.create_user(username="test@example.com", email="test@example.com", password="password123")
         self.merchant = Merchant.objects.create(
             name="Test Merchant",
             email="test@example.com"
         )
+        
+        self.client.force_authenticate(user=self.user)
         
         # Override default merchant ID for testing
         self.settings_override = override_settings(DEFAULT_MERCHANT_ID=self.merchant.id)
@@ -149,6 +153,9 @@ class PayoutAPITests(TransactionTestCase):
         def make_request():
             from django.db import connection
             client = APIClient()
+            # The user needs to be authenticated since this is a new client instance
+            user = User.objects.get(username="test@example.com")
+            client.force_authenticate(user=user)
             try:
                 return client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
             finally:
@@ -184,20 +191,23 @@ class PayoutAPITests(TransactionTestCase):
 
         def make_request(index: int):
             client = APIClient()
+            # The user needs to be authenticated since this is a new client instance
+            user = User.objects.get(username="test@example.com")
+            client.force_authenticate(user=user)
             try:
                 idempotency_key = f"key-{index}"
                 return client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=idempotency_key, format='json')
             finally:
                 connection.close()
 
-        # Run 2 requests concurrently
+        # Run 3 requests concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(make_request, i) for i in range(3)]
             responses = [f.result() for f in concurrent.futures.as_completed(futures)]
 
         status_codes = [r.status_code for r in responses]
         
-        # Exactly one should be 202 ACCEPTED, and 1 should be 400 BAD REQUEST due to insufficient balancer
+        # Exactly one should be 202 ACCEPTED, and 2 should be 400 BAD REQUEST due to insufficient balancer
         self.assertEqual(status_codes.count(status.HTTP_202_ACCEPTED), 1)
         self.assertEqual(status_codes.count(status.HTTP_400_BAD_REQUEST), 2)
         

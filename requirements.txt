@@ -40,3 +40,4 @@ urllib3==2.6.3
 vine==5.1.0
 wcwidth==0.6.0
 wrapt==2.1.2
+djangorestframework-simplejwt==5.3.1
