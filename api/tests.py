@@ -7,7 +7,8 @@ from django.conf import settings
 import concurrent.futures
 import redis
 import json
-from .models import Merchant, Payout, Ledger, OutboxEvent
+from unittest.mock import patch
+from .models import Merchant, Payout, Ledger, OutboxEvent, IdempotencyKey
 from django.db import connection, connections
 
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
@@ -123,6 +124,11 @@ class PayoutAPITests(TransactionTestCase):
         hold_ledger = Ledger.objects.get(payout=payout, entry_type='HOLD')
         self.assertEqual(hold_ledger.amount_paise, -50)
         
+        # Verify DB Idempotency Key created
+        db_key = IdempotencyKey.objects.get(key=key)
+        self.assertEqual(db_key.payout, payout)
+        self.assertEqual(db_key.status, 'PENDING')
+        
         # Verify Redis idempotency key is set to PENDING
         redis_val = redis_client.get(f"idempotency:{key}")
         self.assertEqual(redis_val.decode('utf-8'), 'PENDING')
@@ -202,3 +208,50 @@ class PayoutAPITests(TransactionTestCase):
 
         # Close connections opened by threads so the test db can be dropped
         connections.close_all()
+
+from .tasks import rollback_payout, process_payout
+
+class TasksTests(TransactionTestCase):
+    def setUp(self):
+        self.merchant = Merchant.objects.create(name="Test Merchant", email="test2@example.com")
+        self.payout = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_123", amount_paise=50, status='PENDING')
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-50, payout=self.payout)
+        OutboxEvent.objects.create(
+            event_type='PAYOUT_REQUESTED',
+            payload={"payout_id": str(self.payout.id), "Idempotency-Key": "task-test-key"}, 
+            status='PENDING'
+        )
+
+    def test_rollback_payout_appends_ledger(self):
+        rollback_payout(self.payout.id, reason="test failure")
+        
+        self.payout.refresh_from_db()
+        self.assertEqual(self.payout.status, 'FAILED')
+        
+        # Verify old HOLD still exists
+        holds = Ledger.objects.filter(payout=self.payout, entry_type='HOLD')
+        self.assertEqual(holds.count(), 2)
+        
+        # We should have one -50 and one 50
+        amounts = set([h.amount_paise for h in holds])
+        self.assertEqual(amounts, {-50, 50})
+
+    @patch('api.tasks.random.random')
+    def test_process_payout_success_appends_ledger(self, mock_random):
+        mock_random.return_value = 0.5 # forces success
+        
+        process_payout(self.payout.id)
+        
+        self.payout.refresh_from_db()
+        self.assertEqual(self.payout.status, 'SUCCESS')
+        
+        # Verify holds
+        holds = Ledger.objects.filter(payout=self.payout, entry_type='HOLD')
+        self.assertEqual(holds.count(), 2)
+        amounts = set([h.amount_paise for h in holds])
+        self.assertEqual(amounts, {-50, 50})
+        
+        # Verify debit
+        debits = Ledger.objects.filter(payout=self.payout, entry_type='DEBIT')
+        self.assertEqual(debits.count(), 1)
+        self.assertEqual(debits.first().amount_paise, -50)

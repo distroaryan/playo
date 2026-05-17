@@ -47,7 +47,7 @@ services:
     command: >
       sh -c "python manage.py migrate --noinput &&
              python seed.py &&
-             gunicorn playto.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+             gunicorn playto.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
       REDIS_URL: redis://redis:6379/0
@@ -63,6 +63,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # ─── Celery Worker ───────────────────────────────────────────
   celery-worker:
@@ -84,7 +90,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
 
   # ─── Celery Beat (Periodic Task Scheduler) ───────────────────
   celery-beat:
@@ -106,7 +112,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
 
   # ─── Celery Flower (Monitoring Dashboard) ────────────────────
   flower:

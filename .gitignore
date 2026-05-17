@@ -9,3 +9,8 @@ db.sqlite3
 # Node / React
 node_modules/
 dist/
+
+# Agent Skills
+skills.json
+skills-lock.json
+.agents

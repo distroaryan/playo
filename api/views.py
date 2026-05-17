@@ -99,6 +99,9 @@ def create_payout(request):
                 redis_client.delete(redis_key)
                 return Response({"error": "Insufficient Funds"}, status=status.HTTP_400_BAD_REQUEST)
             
+            from django.db import IntegrityError
+            from .models import IdempotencyKey
+
             # Write Payout
             payout = Payout.objects.create(
                 merchant=merchant,
@@ -106,6 +109,17 @@ def create_payout(request):
                 amount_paise=amount_paise,
                 status='PENDING'
             )
+            
+            # Enforce DB Idempotency
+            try:
+                IdempotencyKey.objects.create(
+                    key=idempotency_key,
+                    payout=payout,
+                    status='PENDING'
+                )
+            except IntegrityError:
+                redis_client.delete(redis_key)
+                return Response({"error": "Request already in flight"}, status=status.HTTP_409_CONFLICT)
             
             # Write Ledger HOLD
             Ledger.objects.create(
