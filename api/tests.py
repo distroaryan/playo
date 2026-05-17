@@ -47,7 +47,7 @@ class PayoutAPITests(TransactionTestCase):
 
     def test_missing_header(self):
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, format='json')
@@ -60,7 +60,7 @@ class PayoutAPITests(TransactionTestCase):
         redis_client.set(f"idempotency:{key}", 'PENDING', ex=300)
         
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -84,7 +84,7 @@ class PayoutAPITests(TransactionTestCase):
         redis_client.set(f"idempotency:{key}", response_data, ex=86400)
         
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -94,7 +94,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_insufficient_balance(self):
         key = "test-key-insufficient"
         payload = {
-            "amount_paise": 200,
+            "amount_rupees": 2.00,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -107,7 +107,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_successful_creation(self):
         key = "test-key-success"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -141,7 +141,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_concurrent_payout_requests(self):
         key = "test-key-concurrent"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         
@@ -177,7 +177,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_overdrawing_balance(self):
         key = "test-key-overdrawal"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         # Total Available balancer = 90

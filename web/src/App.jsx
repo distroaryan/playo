@@ -60,7 +60,7 @@ function App() {
   const [tab, setTab] = useState('payout')
   const [ledger, setLedger] = useState([])
   const [bankAccountId, setBankAccountId] = useState('')
-  const [amountPaise, setAmountPaise] = useState('')
+  const [amountRupees, setAmountRupees] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [statusMsg, setStatusMsg] = useState(null)
   const [polling, setPolling] = useState(false)
@@ -122,7 +122,7 @@ function App() {
           'Idempotency-Key': idempotencyKey,
         },
         body: JSON.stringify({
-          amount_paise: parseInt(amountPaise, 10),
+          amount_rupees: parseFloat(amountRupees),
           bank_account_id: bankAccountId,
         }),
       })
@@ -135,7 +135,7 @@ function App() {
           text: `Payout accepted — ID: ${data.payout_id}`,
         })
         setBankAccountId('')
-        setAmountPaise('')
+        setAmountRupees('')
         setTab('ledger')
         setPolling(true)
         fetchLedger()
@@ -249,14 +249,15 @@ function App() {
               />
             </div>
             <div className="form-group">
-              <label htmlFor="amountPaise">Amount (Paise)</label>
+              <label htmlFor="amountRupees">Amount (Rupees)</label>
               <input
-                id="amountPaise"
+                id="amountRupees"
                 type="number"
-                min="1"
-                placeholder="e.g. 5000 (= ₹50.00)"
-                value={amountPaise}
-                onChange={(e) => setAmountPaise(e.target.value)}
+                min="0.01"
+                step="0.01"
+                placeholder="e.g. 50.00"
+                value={amountRupees}
+                onChange={(e) => setAmountRupees(e.target.value)}
                 required
               />
             </div>

@@ -26,7 +26,7 @@ lua_idempotency_check = redis_client.register_script(LUA_IDEMPOTENCY_SCRIPT)
 IDEMPOTENCY_TTL = 300 # 5 MINUTES
 
 class PayoutSerializer(serializers.Serializer):
-    amount_paise = serializers.BigIntegerField(required=True, min_value=1)
+    amount_rupees = serializers.DecimalField(max_digits=12, decimal_places=2, required=True, min_value=0.01)
     bank_account_id = serializers.CharField(required=True)
 
 @api_view(['GET'])
@@ -56,14 +56,16 @@ def create_payout(request):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    amount_paise = serializer.validated_data['amount_paise']
+    amount_rupees = serializer.validated_data['amount_rupees']
     bank_account_id = serializer.validated_data['bank_account_id']
 
-    if amount_paise is None or not bank_account_id:
+    if amount_rupees is None or not bank_account_id:
         return Response(
-            {"error": "Missing required fields: 'amount_paise' and 'bank_account_id' are required."},
+            {"error": "Missing required fields: 'amount_rupees' and 'bank_account_id' are required."},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+    amount_paise = int(amount_rupees * 100)
 
     merchant_id = getattr(settings, 'DEFAULT_MERCHANT_ID', None)
     if not merchant_id:
