@@ -56,7 +56,10 @@ const Icons = {
   ),
 }
 
+import AuthScreen from './components/AuthScreen'
+
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [tab, setTab] = useState('payout')
   const [ledger, setLedger] = useState([])
   const [bankAccountId, setBankAccountId] = useState('')
@@ -83,8 +86,10 @@ function App() {
 
   // Initial fetch
   useEffect(() => {
-    fetchLedger()
-  }, [fetchLedger])
+    if (isAuthenticated) {
+      fetchLedger()
+    }
+  }, [fetchLedger, isAuthenticated])
 
   // Polling logic
   useEffect(() => {
@@ -173,6 +178,10 @@ function App() {
   const totalEntries = ledger.length
   const holdCount = ledger.filter((e) => e.entry_type === 'HOLD').length
   const netBalance = ledger.reduce((sum, e) => sum + e.amount_paise, 0)
+
+  if (!isAuthenticated) {
+    return <AuthScreen onLogin={() => setIsAuthenticated(true)} />
+  }
 
   return (
     <div className="dashboard">
