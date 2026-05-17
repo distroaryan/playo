@@ -6,13 +6,14 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from rest_framework import serializers
-from .models import Merchant, Payout, Ledger, OutboxEvent
+from .models import Merchant, Payout, Ledger, OutboxEvent, IdempotencyKey
 import redis
 import json
 import logging
+import csv
+import io
 
 logger = logging.getLogger(__name__)
-
 
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
@@ -175,7 +176,7 @@ def list_ledger_entries(request, merchant_id):
     except Merchant.DoesNotExist:
         return Response({"error": "Merchant not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    ledger_entries = Ledger.objects.filter(merchant=merchant).order_by('created_at')
+    ledger_entries = Ledger.objects.filter(merchant=merchant).order_by('-created_at')
     
     # Very basic manual serialization since we aren't heavily using ModelSerializers yet
     data = [
@@ -184,9 +185,133 @@ def list_ledger_entries(request, merchant_id):
             "entry_type": entry.entry_type,
             "amount_paise": entry.amount_paise,
             "payout_id": str(entry.payout.id) if entry.payout else None,
+            "bank_account_id": entry.payout.bank_account_id if entry.payout else None,
             "created_at": entry.created_at.isoformat()
         }
         for entry in ledger_entries
     ]
 
     return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_payout_entries(request, merchant_id):
+    try:
+        merchant = Merchant.objects.get(id=merchant_id)
+        if merchant.email != request.user.email:
+                return Response({"error": "Unauthorized to access this ledger."}, status=status.HTTP_403_FORBIDDEN)
+    except Merchant.DoesNotExist:
+        return Response({"error": "Merchant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    payout_entries = Payout.objects.filter(merchant=merchant).order_by('-created_at')
+    
+    # Very basic manual serialization since we aren't heavily using ModelSerializers yet
+    data = [
+        {
+            "payout_id": str(entry.id),
+            "status": entry.status,
+            "amount_paise": entry.amount_paise,
+            "bank_account_id": entry.bank_account_id,
+            "created_at": entry.created_at.isoformat()
+        }
+        for entry in payout_entries
+    ]
+
+    return Response(data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reconcile_payouts(request):
+    """
+    Reconcile payouts via CSV upload.
+    CSV format: payout_id, status (SUCCESS or FAILED)
+    """
+    if 'file' not in request.FILES:
+        return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+    csv_file = request.FILES['file']
+    if not csv_file.name.endswith('.csv'):
+        return Response({"error": "File is not CSV type"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        merchant = Merchant.objects.get(email=request.user.email)
+    except Merchant.DoesNotExist:
+        return Response({"error": "Merchant not found"}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        decoded_file = csv_file.read().decode('utf-8')
+        io_string = io.StringIO(decoded_file)
+        reader = csv.DictReader(io_string)
+    except Exception as e:
+        return Response({"error": f"Failed to parse CSV: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+    reconciled = 0
+    skipped = 0
+    errors = []
+
+    for row in reader:
+        payout_id = row.get('payout_id')
+        bank_status = row.get('status')
+        
+        if not payout_id or not bank_status:
+            errors.append(f"Missing required columns in row: {row}")
+            skipped += 1
+            continue
+
+        bank_status = bank_status.upper()
+        if bank_status not in ['SUCCESS', 'FAILED']:
+            errors.append(f"Invalid status {bank_status} for payout {payout_id}")
+            skipped += 1
+            continue
+
+        try:
+            with transaction.atomic():
+                # Lock the payout row
+                payout = Payout.objects.select_for_update().get(
+                    id=payout_id, 
+                    merchant=merchant
+                )
+                
+                # Only reconcile if currently pending or processing
+                if payout.status not in ['PENDING', 'PROCESSING']:
+                    errors.append(f"Payout {payout_id} is already in terminal status {payout.status}")
+                    skipped += 1
+                    continue
+                
+                if bank_status == 'SUCCESS':
+                    payout.status = 'SUCCESS'
+                    payout.save(update_fields=['status', 'updated_at'])
+                    
+                    # Finalise debit and delete hold
+                    Ledger.objects.create(
+                        merchant=payout.merchant,
+                        entry_type='DEBIT',
+                        amount_paise=-payout.amount_paise,
+                        payout=payout
+                    )
+                    Ledger.objects.filter(payout=payout, entry_type='HOLD').delete()
+                    IdempotencyKey.objects.filter(payout=payout).update(status='COMPLETED')
+                    
+                elif bank_status == 'FAILED':
+                    payout.status = 'FAILED'
+                    payout.save(update_fields=['status', 'updated_at'])
+                    
+                    # Delete hold (restores balance)
+                    Ledger.objects.filter(payout=payout, entry_type='HOLD').delete()
+                    IdempotencyKey.objects.filter(payout=payout).update(status='COMPLETED')
+
+                reconciled += 1
+                
+        except Payout.DoesNotExist:
+            errors.append(f"Payout {payout_id} not found")
+            skipped += 1
+        except Exception as e:
+            errors.append(f"Error processing {payout_id}: {str(e)}")
+            skipped += 1
+
+    return Response({
+        "reconciled": reconciled,
+        "skipped": skipped,
+        "errors": errors
+    }, status=status.HTTP_200_OK)

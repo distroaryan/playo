@@ -1,17 +1,34 @@
 import React, { useState } from 'react';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { GoogleLogin } from '@react-oauth/google';
+import { googleLogin } from '../lib/auth';
+import { Eye, EyeOff, AlertCircle, Layers, Shield, Zap, Clock, ArrowRight } from 'lucide-react';
 
 export default function AuthScreen({ onLogin }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isSignup = location.pathname === '/signup';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      setLoading(true);
+      setError('');
+      const data = await googleLogin(credentialResponse.credential);
+      onLogin(data);
+      navigate('/');
+    } catch (err) {
+      setError(err.message || 'Google login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -25,8 +42,8 @@ export default function AuthScreen({ onLogin }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
-      
       onLogin(data);
+      navigate('/');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -46,8 +63,8 @@ export default function AuthScreen({ onLogin }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Signup failed');
-      
       onLogin(data);
+      navigate('/');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -56,140 +73,340 @@ export default function AuthScreen({ onLogin }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-      <Card className="w-full max-w-md shadow-sm border-slate-200">
-        <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-2xl font-bold tracking-tight text-slate-900">AuthPortal</CardTitle>
-          <CardDescription className="text-slate-500">
-            Welcome back. Please login to your account or sign up.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="login" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-6">
-              <TabsTrigger value="login">Login</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-            </TabsList>
-            
-            {error && (
-              <div className="mb-4 text-sm text-red-500 bg-red-50 p-2 rounded-md">
-                {error}
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#F8F7FF' }}>
+
+      {/* ── Left Decorative Panel ── */}
+      <div style={{
+        display: 'none',
+        width: '50%',
+        background: 'linear-gradient(135deg, #4F46E5 0%, #6D28D9 100%)',
+        position: 'relative',
+        overflow: 'hidden',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '48px',
+      }} className="auth-left-panel">
+        {/* Geometric blobs */}
+        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.12 }} viewBox="0 0 600 900" preserveAspectRatio="xMidYMid slice">
+          <circle cx="80" cy="120" r="220" fill="white" />
+          <circle cx="520" cy="180" r="160" fill="white" />
+          <circle cx="300" cy="700" r="280" fill="white" />
+          <circle cx="30" cy="800" r="130" fill="white" />
+          <polygon points="430,40 490,76 490,148 430,184 370,148 370,76" fill="white" opacity="0.6" />
+          <polygon points="140,420 200,456 200,528 140,564 80,528 80,456" fill="white" opacity="0.6" />
+          <polygon points="530,520 590,556 590,628 530,664 470,628 470,556" fill="white" opacity="0.4" />
+        </svg>
+
+        {/* Content */}
+        <div style={{ position: 'relative', zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: '340px' }}>
+          {/* Logo mark */}
+          <div style={{
+            width: '72px', height: '72px', borderRadius: '20px',
+            background: 'rgba(255,255,255,0.18)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255,255,255,0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            marginBottom: '20px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+          }}>
+            <Layers style={{ width: '32px', height: '32px', color: 'white' }} />
+          </div>
+          <h1 style={{ color: 'white', fontSize: '28px', fontWeight: 700, letterSpacing: '-0.5px', margin: 0 }}>Playto</h1>
+          <p style={{ color: 'rgba(199,210,254,0.9)', fontSize: '14px', marginTop: '4px', marginBottom: '48px' }}>Payout Engine</p>
+
+          {/* Feature list */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '100%' }}>
+            {[
+              { icon: Shield, title: 'Secure by default', desc: 'Bank-grade encryption on every transaction' },
+              { icon: Zap, title: 'Real-time processing', desc: 'Payouts dispatched within seconds' },
+              { icon: Clock, title: 'Idempotent operations', desc: 'Safe retry on every API call' },
+            ].map(({ icon: Icon, title, desc }) => (
+              <div key={title} style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+                <div style={{
+                  width: '38px', height: '38px', borderRadius: '10px', flexShrink: 0,
+                  background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Icon style={{ width: '16px', height: '16px', color: 'white' }} />
+                </div>
+                <div>
+                  <p style={{ color: 'white', fontWeight: 600, fontSize: '14px', margin: 0 }}>{title}</p>
+                  <p style={{ color: 'rgba(199,210,254,0.8)', fontSize: '13px', marginTop: '2px' }}>{desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p style={{ color: 'rgba(199,210,254,0.6)', fontSize: '12px', marginTop: '48px', textAlign: 'center' }}>
+            Trusted by merchants across India
+          </p>
+        </div>
+      </div>
+
+      {/* ── Right Auth Panel ── */}
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '40px 24px',
+        minHeight: '100vh',
+      }}>
+        <div style={{ width: '100%', maxWidth: '420px' }}>
+
+          {/* Mobile logo */}
+          <div className="auth-mobile-logo" style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '32px' }}>
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '10px',
+              background: 'linear-gradient(135deg, #4F46E5, #6D28D9)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Layers style={{ width: '18px', height: '18px', color: 'white' }} />
+            </div>
+            <span style={{ fontWeight: 700, fontSize: '18px', color: '#0F172A' }}>Playto</span>
+          </div>
+
+          {/* Heading */}
+          <div style={{ marginBottom: '28px' }}>
+            <h2 style={{ fontSize: '28px', fontWeight: 700, color: '#0F172A', letterSpacing: '-0.5px', margin: 0, lineHeight: 1.2 }}>
+              {isSignup ? 'Create your account' : 'Welcome back'}
+            </h2>
+            <p style={{ color: '#64748B', fontSize: '15px', marginTop: '8px' }}>
+              {isSignup ? 'Fill in your details to get started.' : 'Enter your credentials to access your dashboard.'}
+            </p>
+          </div>
+
+          {/* Segmented Tab Control */}
+          <div style={{
+            display: 'flex',
+            background: '#F1F5F9',
+            borderRadius: '12px',
+            padding: '4px',
+            marginBottom: '24px',
+            gap: '4px',
+          }}>
+            <Link
+              to="/login"
+              style={{
+                flex: 1, textAlign: 'center',
+                padding: '9px 16px',
+                borderRadius: '9px',
+                fontSize: '14px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                transition: 'all 0.15s ease',
+                ...((!isSignup) ? {
+                  background: 'white',
+                  color: '#0F172A',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+                } : {
+                  color: '#64748B',
+                }),
+              }}
+            >
+              Sign In
+            </Link>
+            <Link
+              to="/signup"
+              style={{
+                flex: 1, textAlign: 'center',
+                padding: '9px 16px',
+                borderRadius: '9px',
+                fontSize: '14px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                transition: 'all 0.15s ease',
+                ...(isSignup ? {
+                  background: 'white',
+                  color: '#0F172A',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+                } : {
+                  color: '#64748B',
+                }),
+              }}
+            >
+              Sign Up
+            </Link>
+          </div>
+
+          {/* Error Banner */}
+          {error && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '10px',
+              padding: '12px 16px', borderRadius: '10px',
+              background: '#FEF2F2', border: '1px solid #FECACA',
+              marginBottom: '20px',
+            }}>
+              <AlertCircle style={{ width: '16px', height: '16px', color: '#DC2626', flexShrink: 0 }} />
+              <p style={{ fontSize: '14px', color: '#DC2626', margin: 0 }}>{error}</p>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={isSignup ? handleSignup : handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {isSignup && (
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="John Doe"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  required
+                  style={inputStyle}
+                  onFocus={e => Object.assign(e.target.style, inputFocusStyle)}
+                  onBlur={e => Object.assign(e.target.style, inputBlurStyle)}
+                />
               </div>
             )}
-            
-            <TabsContent value="login">
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-email">Email</Label>
-                  <Input 
-                    id="login-email" 
-                    type="email" 
-                    placeholder="m@example.com" 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="login-password">Password</Label>
-                  </div>
-                  <Input 
-                    id="login-password" 
-                    type="password" 
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required 
-                  />
-                </div>
-                <Button type="submit" disabled={loading} className="w-full bg-slate-900 text-white hover:bg-slate-800">
-                  {loading ? 'Signing in...' : 'Sign In'}
-                </Button>
-              </form>
-            </TabsContent>
-            
-            <TabsContent value="signup">
-              <form onSubmit={handleSignup} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-name">Full Name</Label>
-                  <Input 
-                    id="signup-name" 
-                    placeholder="John Doe" 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input 
-                    id="signup-email" 
-                    type="email" 
-                    placeholder="m@example.com" 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Password</Label>
-                  <Input 
-                    id="signup-password" 
-                    type="password" 
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required 
-                  />
-                </div>
-                <Button type="submit" disabled={loading} className="w-full bg-slate-900 text-white hover:bg-slate-800">
-                  {loading ? 'Creating Account...' : 'Create Account'}
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
 
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <Separator />
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                Email address
+              </label>
+              <input
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                style={inputStyle}
+                onFocus={e => Object.assign(e.target.style, inputFocusStyle)}
+                onBlur={e => Object.assign(e.target.style, inputBlurStyle)}
+              />
             </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-white px-2 text-slate-500">
-                Or continue with
-              </span>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                Password
+              </label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                  style={{ ...inputStyle, paddingRight: '44px' }}
+                  onFocus={e => Object.assign(e.target.style, inputFocusStyle)}
+                  onBlur={e => Object.assign(e.target.style, inputBlurStyle)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  style={{
+                    position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+                    color: '#94A3B8', display: 'flex', alignItems: 'center',
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                width: '100%', padding: '13px 24px', marginTop: '4px',
+                background: loading ? '#A5B4FC' : 'linear-gradient(135deg, #4F46E5 0%, #6D28D9 100%)',
+                color: 'white', border: 'none', borderRadius: '10px',
+                fontSize: '15px', fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer',
+                boxShadow: loading ? 'none' : '0 4px 16px rgba(79,70,229,0.35)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              {loading ? (
+                <>
+                  <span style={{
+                    width: '16px', height: '16px', borderRadius: '50%',
+                    border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white',
+                    animation: 'spin 0.7s linear infinite', display: 'inline-block',
+                  }} />
+                  {isSignup ? 'Creating account…' : 'Signing in…'}
+                </>
+              ) : (
+                <>
+                  {isSignup ? 'Create Account' : 'Sign In'}
+                  <ArrowRight size={16} />
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', margin: '24px 0' }}>
+            <div style={{ flex: 1, height: '1px', background: '#E2E8F0' }} />
+            <span style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              or continue with
+            </span>
+            <div style={{ flex: 1, height: '1px', background: '#E2E8F0' }} />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <Button variant="outline" className="w-full border-slate-200">
-              <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                <path
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  fill="#4285F4"
-                />
-                <path
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  fill="#34A853"
-                />
-                <path
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  fill="#FBBC05"
-                />
-                <path
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  fill="#EA4335"
-                />
-              </svg>
-              Google
-            </Button>
-            <Button variant="outline" className="w-full border-slate-200">
-              <svg className="mr-2 h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
-              </svg>
-              GitHub
-            </Button>
+          {/* Google Button */}
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={() => setError('Google login was cancelled or failed.')}
+              text={isSignup ? 'signup_with' : 'signin_with'}
+              size="large"
+              theme="outline"
+              shape="rectangular"
+              width="380"
+            />
           </div>
-        </CardContent>
-      </Card>
+
+          {/* Footer link */}
+          <p style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#64748B' }}>
+            {isSignup ? (
+              <>Already have an account?{' '}
+                <Link to="/login" style={{ color: '#4F46E5', fontWeight: 600, textDecoration: 'none' }}>
+                  Sign in
+                </Link>
+              </>
+            ) : (
+              <>Don't have an account?{' '}
+                <Link to="/signup" style={{ color: '#4F46E5', fontWeight: 600, textDecoration: 'none' }}>
+                  Sign up
+                </Link>
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Spin keyframe */}
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (min-width: 1024px) {
+          .auth-left-panel { display: flex !important; }
+          .auth-mobile-logo { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
+
+const inputStyle = {
+  width: '100%', padding: '11px 14px',
+  border: '1.5px solid #E2E8F0', borderRadius: '9px',
+  fontSize: '15px', color: '#0F172A', background: 'white',
+  outline: 'none', transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+  fontFamily: 'Inter, system-ui, sans-serif',
+  boxSizing: 'border-box',
+};
+
+const inputFocusStyle = {
+  borderColor: '#4F46E5',
+  boxShadow: '0 0 0 3px rgba(79,70,229,0.12)',
+};
+
+const inputBlurStyle = {
+  borderColor: '#E2E8F0',
+  boxShadow: 'none',
+};

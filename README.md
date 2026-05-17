@@ -7,7 +7,23 @@
 
 A payment engine simulation designed with robust financial systems in mind, built using Django, DRF, PostgreSQL, Celery, and Redis. It features exact-once processing, Redis-based atomic idempotency using Lua scripts, strict row-level locking for balance management, and a transactional outbox pattern to guarantee event delivery.
 
----
+
+## Summary
+
+The Playto Payout Engine is designed with institutional-grade reliability, ensuring exact-once processing and absolute financial safety under high concurrency. 
+
+**Core Technical Value Drivers:**
+* **Zero Race Conditions:** The system models balances via an append-only Ledger rather than a mutable row. Pessimistic PostgreSQL row-level locks (`SELECT FOR UPDATE`) strictly prevent overdrawing, even during simultaneous API requests.
+* **Exact-Once Execution:** An atomic Redis Lua script acts as an impenetrable idempotency gate, blocking duplicates at the cache layer with zero database penalty. 
+* **Guaranteed Delivery:** A Transactional Outbox pattern guarantees that if a payout is committed to the database, the asynchronous background worker (Celery) *will* process it. Event drops are impossible.
+* **Self-Healing Mechanics:** Bank gateway timeouts are automatically caught, retried with exponential backoff, and eventually rolled back securely, releasing held funds without manual intervention.
+
+### Excalidraw Architectural Views
+* [System Architecture & Request Flow](https://excalidraw.com/#json=EjRPUH-sWry3fIVb3e9YM,VFk4zS4x4JUnVj_3BDB0oQ)
+* [Asynchronous Outbox Worker Flow](https://excalidraw.com/#json=nMBeTO-nHBwOj4AS2VSud,2eVD2YNcXo1LsPeoznoXvg)
+* [Data Model & Relationships](https://excalidraw.com/#json=SwsIu7v4eMhaF8rhoEK5L,cWFUJy9PwxCINciWuCVFRg)
+
+
 
 ## Architecture Overview
 
@@ -15,7 +31,6 @@ The system is designed to handle high concurrency without race conditions, overd
 
 ![Playto Architecture Diagram](assets/architecture_diagram.png)
 
----
 
 ### Client → Backend Request Flow
 
@@ -66,7 +81,6 @@ flowchart TD
 5. If the key doesn't exist, set it to `PENDING` and proceed into a **single PostgreSQL transaction** that acquires a row-level lock on the merchant, validates the balance, and atomically inserts the payout, a `HOLD` ledger entry, and an outbox event.
 6. The client receives **202 Accepted** immediately — actual bank processing happens asynchronously.
 
----
 
 ### Celery Outbox Worker Flow
 
@@ -109,7 +123,6 @@ flowchart LR
    - **Timeout (10%)** — the task is re-enqueued with exponential backoff for retry.
 4. On terminal states (SUCCESS or FAILED), the Redis idempotency key is updated from `PENDING` to the final JSON response, enabling future idempotent replays.
 
----
 
 ### Key Architectural Decisions
 
@@ -125,7 +138,6 @@ flowchart LR
 
 For more details on these architectural decisions, please see [EXPLAINER.md](EXPLAINER.md).
 
----
 
 ## File Structure
 
@@ -145,7 +157,6 @@ playto/
 └── test_benchmark.py      # Load/benchmark test script
 ```
 
----
 
 ### Data Model
 
@@ -198,7 +209,6 @@ classDiagram
 - Each **Payout** starts with a `HOLD` ledger entry (reserving funds) and ends with either a `DEBIT` (on success) or deletion of the hold (on failure).
 - Each **Payout** triggers exactly one **OutboxEvent**, ensuring the async processing is guaranteed to fire even if the worker is temporarily down.
 
----
 
 ### Payout State Machine
 
@@ -233,7 +243,6 @@ stateDiagram-v2
 - **FAILED** — The bank declined the transaction. The `HOLD` ledger entry is deleted, releasing the reserved funds back to the merchant. This is a terminal state.
 - **Timeout loop** — If the bank gateway hangs (10% probability), the payout is re-enqueued back to `PENDING` with exponential backoff, and the cycle repeats.
 
----
 
 ## Docker Containers
 
@@ -268,7 +277,6 @@ docker compose down
 | React Dashboard   | http://localhost:5173       |
 | Flower Dashboard  | http://localhost:5555       |
 
----
 
 ## Local Development Setup
 
@@ -344,9 +352,8 @@ Create a `.env` file inside `web/` with your merchant UUID:
 VITE_MERCHANT_ID=<your-merchant-uuid>
 ```
 
-> **Note:** All environment variables (`DATABASE_URL`, `REDIS_URL`, `DEFAULT_MERCHANT_ID`) have local defaults baked into `settings.py`. You can run the app without a `.env` file as long as PostgreSQL and Redis are available on `localhost`.
+> **Note:** All environment variables (`DATABASE_URL`, `REDIS_URL`) have local defaults baked into `settings.py`. You can run the app without a `.env` file as long as PostgreSQL and Redis are available on `localhost`.
 
----
 
 ## Makefile Commands Reference
 
@@ -392,7 +399,6 @@ VITE_MERCHANT_ID=<your-merchant-uuid>
 | `make clean`  | Remove Docker volumes and stopped containers |
 | `make help`   | Show all available commands              |
 
----
 
 ## Running Tests
 
@@ -438,7 +444,6 @@ k6 run k6_load_test.js
 # make test-load
 ```
 
----
 
 ## License
 This project is licensed under the [MIT License](LICENSE).

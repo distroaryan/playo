@@ -11,7 +11,7 @@ from unittest.mock import patch
 from .models import Merchant, Payout, Ledger, OutboxEvent, IdempotencyKey
 from django.db import connection, connections
 from django.contrib.auth.models import User
-
+from django.core.files.uploadedfile import SimpleUploadedFile
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
 class PayoutAPITests(TransactionTestCase):
@@ -27,10 +27,6 @@ class PayoutAPITests(TransactionTestCase):
         )
         
         self.client.force_authenticate(user=self.user)
-        
-        # Override default merchant ID for testing
-        self.settings_override = override_settings(DEFAULT_MERCHANT_ID=self.merchant.id)
-        self.settings_override.enable()
 
         # Seed initial balance via Ledger
         Ledger.objects.create(
@@ -265,3 +261,67 @@ class TasksTests(TransactionTestCase):
         debits = Ledger.objects.filter(payout=self.payout, entry_type='DEBIT')
         self.assertEqual(debits.count(), 1)
         self.assertEqual(debits.first().amount_paise, -50)
+
+class ReconciliationAPITests(TransactionTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.url = reverse('reconcile_payouts')
+        
+        self.user = User.objects.create_user(username="test@example.com", email="test@example.com", password="password123")
+        self.merchant = Merchant.objects.create(name="Test Merchant", email="test@example.com")
+        
+        self.client.force_authenticate(user=self.user)
+        
+        # Create some test payouts
+        self.payout_pending = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_1", amount_paise=100, status='PENDING')
+        self.payout_processing = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_2", amount_paise=200, status='PROCESSING')
+        self.payout_success = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_3", amount_paise=300, status='SUCCESS')
+        
+        # Create hold ledgers for pending and processing
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-100, payout=self.payout_pending)
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-200, payout=self.payout_processing)
+        
+        # Idempotency keys
+        IdempotencyKey.objects.create(key="key1", payout=self.payout_pending, status='PENDING')
+        IdempotencyKey.objects.create(key="key2", payout=self.payout_processing, status='PENDING')
+
+    def test_reconcile_success_and_failure(self):
+        csv_content = f"payout_id,status\n{self.payout_pending.id},SUCCESS\n{self.payout_processing.id},FAILED\n"
+        csv_file = SimpleUploadedFile("reconcile.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post(self.url, {'file': csv_file}, format='multipart')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['reconciled'], 2)
+        self.assertEqual(response.data['skipped'], 0)
+        
+        self.payout_pending.refresh_from_db()
+        self.assertEqual(self.payout_pending.status, 'SUCCESS')
+        
+        # Verify hold is deleted, debit is created
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_pending, entry_type='HOLD').exists())
+        self.assertTrue(Ledger.objects.filter(payout=self.payout_pending, entry_type='DEBIT').exists())
+        self.assertEqual(IdempotencyKey.objects.get(payout=self.payout_pending).status, 'COMPLETED')
+        
+        self.payout_processing.refresh_from_db()
+        self.assertEqual(self.payout_processing.status, 'FAILED')
+        
+        # Verify hold is deleted, no debit is created
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_processing, entry_type='HOLD').exists())
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_processing, entry_type='DEBIT').exists())
+        self.assertEqual(IdempotencyKey.objects.get(payout=self.payout_processing).status, 'COMPLETED')
+
+    def test_reconcile_invalid_status_and_terminal(self):
+        csv_content = f"payout_id,status\n{self.payout_pending.id},INVALID\n{self.payout_success.id},SUCCESS\n"
+        csv_file = SimpleUploadedFile("reconcile.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post(self.url, {'file': csv_file}, format='multipart')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['reconciled'], 0)
+        self.assertEqual(response.data['skipped'], 2)
+        
+        # Ensure nothing changed
+        self.payout_pending.refresh_from_db()
+        self.assertEqual(self.payout_pending.status, 'PENDING')
+        self.assertTrue(Ledger.objects.filter(payout=self.payout_pending, entry_type='HOLD').exists())

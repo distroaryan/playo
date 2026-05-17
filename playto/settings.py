@@ -132,10 +132,7 @@ CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 
-DEFAULT_MERCHANT_ID = os.environ.get(
-    'DEFAULT_MERCHANT_ID',
-    '00000000-0000-0000-0000-000000000000'
-)
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 
 # Password validation
