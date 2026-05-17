@@ -59,7 +59,7 @@ export default function Dashboard({ token, merchantId, onLogout }) {
     if (!polling) return
     intervalRef.current = setInterval(async () => {
       const d = await fetchData()
-      if (d && !d.pData.some(p => p.status === 'PENDING')) setPolling(false)
+      if (d && !d.pData.some(p => p.status === 'PENDING' || p.status === 'PROCESSING')) setPolling(false)
     }, 5000)
     return () => clearInterval(intervalRef.current)
   }, [polling, fetchData])
@@ -88,7 +88,7 @@ export default function Dashboard({ token, merchantId, onLogout }) {
       if (res.ok) {
         setStatusMsg({ type: 'success', text: `Payout accepted — ID: ${data.payout_id}` })
         setBankAccountId(''); setAmountRupees('')
-        setTab('ledger'); setPolling(true); fetchData()
+        setTab('payouts'); setPolling(true); fetchData()
       } else {
         setStatusMsg({ type: 'error', text: data.error || 'Request failed' })
       }
@@ -107,7 +107,7 @@ export default function Dashboard({ token, merchantId, onLogout }) {
     })
 
   const totalEntries = ledger.length
-  const holdCount    = payouts.filter(p => p.status === 'PENDING').length
+  const holdCount    = payouts.filter(p => p.status === 'PENDING' || p.status === 'PROCESSING').length
   const credits      = ledger.filter(e => e.entry_type === 'CREDIT').reduce((s, e) => s + e.amount_paise, 0)
   const successfulPayouts = payouts.filter(p => p.status === 'SUCCESS').reduce((s, p) => s + p.amount_paise, 0)
   const netBalance   = credits - successfulPayouts
@@ -229,8 +229,15 @@ export default function Dashboard({ token, merchantId, onLogout }) {
               onClick={() => setTab('payout')}
             />
             <TabButton
-              active={tab === 'ledger'}
+              active={tab === 'payouts'}
               icon={<List size={15} />}
+              label="Payouts"
+              onClick={() => { setTab('payouts'); fetchData() }}
+              badge={polling ? 'LIVE' : null}
+            />
+            <TabButton
+              active={tab === 'ledger'}
+              icon={<Layers size={15} />}
               label="Ledger"
               onClick={() => { setTab('ledger'); fetchData() }}
               badge={polling ? 'LIVE' : null}
@@ -348,13 +355,13 @@ export default function Dashboard({ token, merchantId, onLogout }) {
             </div>
           )}
 
-          {/* ── Ledger tab ── */}
-          {tab === 'ledger' && (
+          {/* ── Payouts tab ── */}
+          {tab === 'payouts' && (
             <div style={{ padding: '32px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
                 <h2 style={{ fontSize: '17px', fontWeight: 600, color: '#0F172A', margin: 0 }}>Payouts</h2>
                 <button
-                  id="refresh-ledger"
+                  id="refresh-payouts"
                   onClick={handleRefresh}
                   disabled={refreshing}
                   style={{
@@ -375,7 +382,7 @@ export default function Dashboard({ token, merchantId, onLogout }) {
                   style={{
                     textAlign: 'center', padding: '56px 32px',
                     border: '2px dashed #E2E8F0', borderRadius: '12px',
-                    background: '#FAFBFC', marginBottom: '32px'
+                    background: '#FAFBFC',
                   }}
                 >
                   <p style={{ color: '#94A3B8', fontSize: '13px', margin: 0 }}>
@@ -383,7 +390,7 @@ export default function Dashboard({ token, merchantId, onLogout }) {
                   </p>
                 </div>
               ) : (
-                <div id="payout-table" style={{ borderRadius: '10px', border: '1px solid #F1F5F9', overflow: 'hidden', marginBottom: '32px' }}>
+                <div id="payout-table" style={{ borderRadius: '10px', border: '1px solid #F1F5F9', overflow: 'hidden' }}>
                   <div style={{
                     display: 'grid', gridTemplateColumns: '120px 140px 1fr 160px',
                     padding: '10px 16px', background: '#F8FAFC',
@@ -437,9 +444,28 @@ export default function Dashboard({ token, merchantId, onLogout }) {
                   })}
                 </div>
               )}
+            </div>
+          )}
 
+          {/* ── Ledger tab ── */}
+          {tab === 'ledger' && (
+            <div style={{ padding: '32px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
                 <h2 style={{ fontSize: '17px', fontWeight: 600, color: '#0F172A', margin: 0 }}>Ledger Entries</h2>
+                <button
+                  id="refresh-ledger"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '7px 14px', border: '1px solid #E2E8F0', borderRadius: '8px',
+                    background: 'white', fontSize: '13px', fontWeight: 500, color: '#475569',
+                    cursor: refreshing ? 'not-allowed' : 'pointer', transition: 'all 0.15s',
+                  }}
+                >
+                  <RefreshCw size={13} style={{ animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }} />
+                  Refresh
+                </button>
               </div>
 
               {ledger.length === 0 ? (
