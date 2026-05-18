@@ -22,6 +22,7 @@ The Playto Payout Engine is designed with institutional-grade reliability, ensur
 * [System Architecture & Request Flow](https://excalidraw.com/#json=EjRPUH-sWry3fIVb3e9YM,VFk4zS4x4JUnVj_3BDB0oQ)
 * [Asynchronous Outbox Worker Flow](https://excalidraw.com/#json=nMBeTO-nHBwOj4AS2VSud,2eVD2YNcXo1LsPeoznoXvg)
 * [Data Model & Relationships](https://excalidraw.com/#json=SwsIu7v4eMhaF8rhoEK5L,cWFUJy9PwxCINciWuCVFRg)
+* [Reconciliation API Sync Flow](https://excalidraw.com/#json=NlRB_EtnXycc-NPVr3WS-,9pFm3CEhk5h5TkzPf9OLCQ)
 
 
 
@@ -443,6 +444,10 @@ k6 run k6_load_test.js
 # Or using Makefile:
 # make test-load
 ```
+
+For detailed information on the high-throughput 10,000+ RPS test suite (including the Payout, Reconciliation, and Mixed Load tests), see [Performance & Load Testing](docs/LOAD_TESTING.md).
+
+For more details on the new Reconciliation flow, see [Reconciliation API](docs/RECONCILIATION.md).
 
 
 ## License

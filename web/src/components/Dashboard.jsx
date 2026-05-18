@@ -2,8 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Layers, LogOut, ArrowUpRight, List, RefreshCw,
   Inbox, CheckCircle, AlertCircle, TrendingUp, Clock,
-  Wallet, SendHorizonal, CreditCard, ChevronRight,
+  Wallet, SendHorizonal, CreditCard, ChevronRight, FileUp,
 } from 'lucide-react'
+import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -27,6 +31,13 @@ export default function Dashboard({ token, merchantId, onLogout }) {
   const [statusMsg, setStatusMsg]   = useState(null)   // { type: 'success'|'error', text }
   const [polling, setPolling]       = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  
+  // Reconciliation State
+  const [reconFile, setReconFile] = useState(null)
+  const [reconSubmitting, setReconSubmitting] = useState(false)
+  const [reconResult, setReconResult] = useState(null)
+  const [reconError, setReconError] = useState(null)
+  
   const intervalRef = useRef(null)
 
   const fetchData = useCallback(async () => {
@@ -97,6 +108,36 @@ export default function Dashboard({ token, merchantId, onLogout }) {
     } finally { setSubmitting(false) }
   }
 
+  const handleReconcileSubmit = async (e) => {
+    e.preventDefault()
+    if (!reconFile) return
+    setReconSubmitting(true)
+    setReconResult(null)
+    setReconError(null)
+    
+    const formData = new FormData()
+    formData.append('file', reconFile)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/reconcile`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setReconResult(data)
+        fetchData() // Refresh ledger and payouts
+      } else {
+        setReconError(data.error || 'Failed to reconcile payouts')
+      }
+    } catch {
+      setReconError('Network error — is the backend running?')
+    } finally {
+      setReconSubmitting(false)
+    }
+  }
+
   const fmt = (paise) =>
     `${paise >= 0 ? '+' : '−'} ₹${(Math.abs(paise) / 100).toFixed(2)}`
 
@@ -146,6 +187,83 @@ export default function Dashboard({ token, merchantId, onLogout }) {
 
           {/* Right */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            
+            <Dialog onOpenChange={(open) => {
+              if (!open) {
+                setReconFile(null)
+                setReconResult(null)
+                setReconError(null)
+              }
+            }}>
+              <DialogTrigger asChild>
+                <button
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '7px 14px', border: '1px solid #E2E8F0',
+                    borderRadius: '8px', background: 'white',
+                    fontSize: '13px', fontWeight: 500, color: '#475569',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#C7D2FE'; e.currentTarget.style.color = '#4F46E5' }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#E2E8F0'; e.currentTarget.style.color = '#475569' }}
+                >
+                  <FileUp size={13} />
+                  Reconcile
+                </button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[425px]">
+                <DialogHeader>
+                  <DialogTitle>Reconcile Payouts</DialogTitle>
+                  <DialogDescription>
+                    Upload a CSV file containing <code className="text-xs bg-muted p-1 rounded">payout_id</code> and <code className="text-xs bg-muted p-1 rounded">status</code> (SUCCESS/FAILED) to reconcile payouts.
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <form onSubmit={handleReconcileSubmit} className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="csv-file">CSV File</Label>
+                    <Input 
+                      id="csv-file" 
+                      type="file" 
+                      accept=".csv"
+                      onChange={e => setReconFile(e.target.files?.[0] || null)}
+                    />
+                  </div>
+
+                  {reconResult && (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800">
+                      <p className="font-semibold mb-1">Reconciliation Complete</p>
+                      <ul className="list-disc pl-4 text-xs">
+                        <li>Reconciled: {reconResult.reconciled}</li>
+                        <li>Skipped: {reconResult.skipped}</li>
+                      </ul>
+                      {reconResult.errors?.length > 0 && (
+                        <div className="mt-2 text-red-700">
+                          <p className="font-semibold">Errors ({reconResult.errors.length}):</p>
+                          <ul className="list-disc pl-4 text-[10px] max-h-24 overflow-y-auto">
+                            {reconResult.errors.map((err, i) => <li key={i}>{err}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {reconError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800 flex gap-2">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <p>{reconError}</p>
+                    </div>
+                  )}
+
+                  <DialogFooter>
+                    <Button type="submit" disabled={!reconFile || reconSubmitting}>
+                      {reconSubmitting ? 'Processing...' : 'Upload & Reconcile'}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+
             <div style={{
               width: '34px', height: '34px', borderRadius: '50%',
               background: 'linear-gradient(135deg, #818CF8, #4F46E5)',
