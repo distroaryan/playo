@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-n-ih5)wqe4bh-x!+tkmp5cjfxc=lm!nijx6uwo*+q)xgs*=#sy
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework_simplejwt',
     'django_celery_results',
     'corsheaders',
     'api',
@@ -131,10 +132,7 @@ CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 
-DEFAULT_MERCHANT_ID = os.environ.get(
-    'DEFAULT_MERCHANT_ID',
-    '00000000-0000-0000-0000-000000000000'
-)
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 
 # Password validation
@@ -182,4 +180,17 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'api.tasks.relay_outbox',
         'schedule': 10.0,
     },
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    )
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }

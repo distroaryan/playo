@@ -5,14 +5,13 @@
 > **Amounts:** Always integers in paise. Never floats. Never Python arithmetic on balances.
 
 We are building a payment engine where the merchant can request payouts and we simulate the full
-lifecycle with production-grade practices. Single merchant only — no authentication, no login,
-no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
+lifecycle with production-grade practices.
 
 ---
 
 ## Checkpoint 1 — Project Scaffold & Environment
 
-**Git commit:** `chore: project scaffold, docker-compose, env config`
+
 
 - [x] Initialise Django project (`playto/`) and DRF app structure
 - [x] Create `docker-compose.yml` with four services: `postgres`, `redis`, `django`, `celery`
@@ -25,7 +24,7 @@ no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
 
 ## Checkpoint 2 — Core Models & Migrations
 
-**Git commit:** `feat: merchant, ledger, payout, idempotency key models`
+
 
 - [x] **`Merchant` model**
   - `id` (UUID), `name`, `email`, `created_at`
@@ -66,7 +65,7 @@ no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
 
 ## Checkpoint 3 — Seed Data
 
-**Git commit:** `feat: seed script — single merchant with credit history`
+
 
 - [ ] Management command `python manage.py seed`
 - [ ] Creates exactly 1 merchant — id stored in `.env` as `DEFAULT_MERCHANT_ID`
@@ -78,23 +77,23 @@ no multi-tenant scoping. Redis is used exclusively as a Celery message broker.
 
 ## Checkpoint 4 — Payout Request API
 
-**Git commit:** `feat: POST /api/v1/payouts — idempotency check, row lock, atomic hold, enqueue`
+
 
 This is the most critical checkpoint. Order of operations is strict.
 
 ### Request flow:
 
-- [ ] **Step 1 — Validate request**
+- [x] **Step 1 — Validate request**
   - Reject `400` if `Idempotency-Key` header is missing
   - Reject `400` if `amount_paise` or `bank_account_id` is missing or malformed
 
-- [ ] **Step 2 — Postgres idempotency check**
+- [x] **Step 2 — Postgres idempotency check**
   - Query `IdempotencyKey` table for this key
   - If found with `status=COMPLETED` → fetch the linked `Payout` via `idempotency_key.payout`, serialize and return with `200`
   - If found with `status=PENDING` → return `409 Conflict` — request is already in flight
   - If not found → proceed to step 3
 
-- [ ] **Step 3 — Single atomic DB transaction** (`with transaction.atomic():`)
+- [x] **Step 3 — Single atomic DB transaction** (`with transaction.atomic():`)
   - `SELECT FOR UPDATE` on `Merchant` row — acquires row-level lock
   - Compute available balance via DB-level `SUM` on `Ledger`:
     ```python
@@ -109,19 +108,19 @@ This is the most critical checkpoint. Order of operations is strict.
   - Write `OutboxEvent(event_type='PAYOUT_REQUESTED', payload={'payout_id': ...}, status='PENDING')`
   - All four writes are inside one `atomic()` block — no Celery call from the view
 
-- [ ] **Step 4 — Return response**
+- [x] **Step 4 — Return response**
   - Return `202 Accepted`:
     ```json
     { "payout_id": "...", "status": "pending", "amount_paise": 50000 }
     ```
 
-- [ ] Write unit tests for: missing header, duplicate key (pending), duplicate key (completed), insufficient balance, successful creation, outbox entry created alongside payout using testcontainers
+- [x] Write unit tests for: missing header, duplicate key (pending), duplicate key (completed), insufficient balance, successful creation, outbox entry created alongside payout using testcontainers
 
 ---
 
 ## Checkpoint 5 — Transactional Outbox Relay Worker
 
-**Git commit:** `feat: outbox relay worker — polls DB and enqueues Celery tasks`
+
 
 ### Why this matters:
 
@@ -162,7 +161,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 6 — Celery Worker & Simulation Logic
 
-**Git commit:** `feat: payout processor worker with simulation, hang retry, failure refund`
+
 
 ### Task structure:
 
@@ -219,7 +218,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 7 — Beat Watchdog
 
-**Git commit:** `feat: celery beat watchdog for orphaned PENDING and stale PROCESSING payouts`
+
 
 - [ ] Celery Beat periodic task runs every 2 minutes
 - [ ] **Orphaned PENDING sweep**
@@ -237,7 +236,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 8 — Balance & Transaction APIs
 
-**Git commit:** `feat: balance, transaction history, and payout status endpoints`
+
 
 - [ ] **`GET /api/v1/merchant/balance`**
   - `available_balance` = `SUM(amount_paise)` across all `Ledger` entries for the merchant
@@ -263,7 +262,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 9 — React Frontend
 
-**Git commit:** `feat: merchant dashboard — balance card, payout form, live payout table`
+
 
 - [ ] Bootstrap React app with Vite + Tailwind
 - [ ] `VITE_API_BASE_URL` in frontend `.env`
@@ -298,7 +297,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 10 — End-to-End Testing
 
-**Git commit:** `test: payout lifecycle, concurrency, idempotency, failure, hang, watchdog`
+
 
 - [ ] **Idempotency test** — same key in-flight → `409`; same key after completion → linked payout returned
 - [ ] **Concurrency test** — 5 simultaneous POSTs, verify row lock holds, final balance is correct
@@ -312,7 +311,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 11 — Polish & Documentation
 
-**Git commit:** `docs: README, ARCHITECTURE.md, API reference, env example`
+
 
 - [ ] `README.md` — setup, seed, run, test instructions
 - [ ] `ARCHITECTURE.md` — component diagram, data flow, key decisions
@@ -324,7 +323,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 12 — Webhook Delivery with Retries *(bonus)*
 
-**Git commit:** `feat: webhook delivery worker with exponential backoff`
+
 
 ### Models:
 
@@ -358,7 +357,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 13 — Event Sourcing / Audit Log *(bonus)*
 
-**Git commit:** `feat: immutable payout event log for full state transition history`
+
 
 - [ ] **`PayoutEvent` model** (append-only)
   - `id` (UUID), `payout` (FK), `merchant` (FK)
@@ -386,7 +385,7 @@ marks OutboxEvent PROCESSED ← only after Celery confirms the enqueue succeeded
 
 ## Checkpoint 14 — Multi-Tenant with Auth *(bonus)*
 
-**Git commit:** `feat: merchant API keys, scoped endpoints, multi-tenant data isolation`
+
 
 - [ ] **`MerchantAPIKey` model** — `hashed_key` (SHA-256, never plaintext), `is_active`
 - [ ] Custom DRF auth class — hashes incoming bearer token, looks up merchant

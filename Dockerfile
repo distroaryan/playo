@@ -27,6 +27,3 @@ COPY . .
 
 # ── Expose Port ───────────────────────────────────────────────
 EXPOSE 8000
-
-# ── Default Command ───────────────────────────────────────────
-CMD ["gunicorn", "playto.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]

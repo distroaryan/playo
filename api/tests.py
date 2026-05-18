@@ -7,9 +7,11 @@ from django.conf import settings
 import concurrent.futures
 import redis
 import json
-from .models import Merchant, Payout, Ledger, OutboxEvent
+from unittest.mock import patch
+from .models import Merchant, Payout, Ledger, OutboxEvent, IdempotencyKey
 from django.db import connection, connections
-
+from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 redis_client = redis.from_url(settings.CELERY_BROKER_URL)
 
 class PayoutAPITests(TransactionTestCase):
@@ -17,15 +19,14 @@ class PayoutAPITests(TransactionTestCase):
         self.client = APIClient()
         self.url = reverse('create_payout')
         
-        # Create a test merchant
+        # Create a test user and merchant
+        self.user = User.objects.create_user(username="test@example.com", email="test@example.com", password="password123")
         self.merchant = Merchant.objects.create(
             name="Test Merchant",
             email="test@example.com"
         )
         
-        # Override default merchant ID for testing
-        self.settings_override = override_settings(DEFAULT_MERCHANT_ID=self.merchant.id)
-        self.settings_override.enable()
+        self.client.force_authenticate(user=self.user)
 
         # Seed initial balance via Ledger
         Ledger.objects.create(
@@ -46,7 +47,7 @@ class PayoutAPITests(TransactionTestCase):
 
     def test_missing_header(self):
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, format='json')
@@ -59,7 +60,7 @@ class PayoutAPITests(TransactionTestCase):
         redis_client.set(f"idempotency:{key}", 'PENDING', ex=300)
         
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -83,7 +84,7 @@ class PayoutAPITests(TransactionTestCase):
         redis_client.set(f"idempotency:{key}", response_data, ex=86400)
         
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -93,7 +94,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_insufficient_balance(self):
         key = "test-key-insufficient"
         payload = {
-            "amount_paise": 200,
+            "amount_rupees": 2.00,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -106,7 +107,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_successful_creation(self):
         key = "test-key-success"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         response = self.client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
@@ -123,6 +124,11 @@ class PayoutAPITests(TransactionTestCase):
         hold_ledger = Ledger.objects.get(payout=payout, entry_type='HOLD')
         self.assertEqual(hold_ledger.amount_paise, -50)
         
+        # Verify DB Idempotency Key created
+        db_key = IdempotencyKey.objects.get(key=key)
+        self.assertEqual(db_key.payout, payout)
+        self.assertEqual(db_key.status, 'PENDING')
+        
         # Verify Redis idempotency key is set to PENDING
         redis_val = redis_client.get(f"idempotency:{key}")
         self.assertEqual(redis_val.decode('utf-8'), 'PENDING')
@@ -135,7 +141,7 @@ class PayoutAPITests(TransactionTestCase):
     def test_concurrent_payout_requests(self):
         key = "test-key-concurrent"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         
@@ -143,6 +149,9 @@ class PayoutAPITests(TransactionTestCase):
         def make_request():
             from django.db import connection
             client = APIClient()
+            # The user needs to be authenticated since this is a new client instance
+            user = User.objects.get(username="test@example.com")
+            client.force_authenticate(user=user)
             try:
                 return client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=key, format='json')
             finally:
@@ -171,27 +180,30 @@ class PayoutAPITests(TransactionTestCase):
     def test_overdrawing_balance(self):
         key = "test-key-overdrawal"
         payload = {
-            "amount_paise": 50,
+            "amount_rupees": 0.50,
             "bank_account_id": "bank_123"
         }
         # Total Available balancer = 90
 
         def make_request(index: int):
             client = APIClient()
+            # The user needs to be authenticated since this is a new client instance
+            user = User.objects.get(username="test@example.com")
+            client.force_authenticate(user=user)
             try:
                 idempotency_key = f"key-{index}"
                 return client.post(self.url, payload, HTTP_IDEMPOTENCY_KEY=idempotency_key, format='json')
             finally:
                 connection.close()
 
-        # Run 2 requests concurrently
+        # Run 3 requests concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(make_request, i) for i in range(3)]
             responses = [f.result() for f in concurrent.futures.as_completed(futures)]
 
         status_codes = [r.status_code for r in responses]
         
-        # Exactly one should be 202 ACCEPTED, and 1 should be 400 BAD REQUEST due to insufficient balancer
+        # Exactly one should be 202 ACCEPTED, and 2 should be 400 BAD REQUEST due to insufficient balancer
         self.assertEqual(status_codes.count(status.HTTP_202_ACCEPTED), 1)
         self.assertEqual(status_codes.count(status.HTTP_400_BAD_REQUEST), 2)
         
@@ -202,3 +214,114 @@ class PayoutAPITests(TransactionTestCase):
 
         # Close connections opened by threads so the test db can be dropped
         connections.close_all()
+
+from .tasks import rollback_payout, process_payout
+
+class TasksTests(TransactionTestCase):
+    def setUp(self):
+        self.merchant = Merchant.objects.create(name="Test Merchant", email="test2@example.com")
+        self.payout = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_123", amount_paise=50, status='PENDING')
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-50, payout=self.payout)
+        OutboxEvent.objects.create(
+            event_type='PAYOUT_REQUESTED',
+            payload={"payout_id": str(self.payout.id), "Idempotency-Key": "task-test-key"}, 
+            status='PENDING'
+        )
+
+    def test_rollback_payout_appends_ledger(self):
+        rollback_payout(self.payout.id, reason="test failure")
+        
+        self.payout.refresh_from_db()
+        self.assertEqual(self.payout.status, 'FAILED')
+        
+        # Verify old HOLD still exists
+        holds = Ledger.objects.filter(payout=self.payout, entry_type='HOLD')
+        self.assertEqual(holds.count(), 2)
+        
+        # We should have one -50 and one 50
+        amounts = set([h.amount_paise for h in holds])
+        self.assertEqual(amounts, {-50, 50})
+
+    @patch('api.tasks.random.random')
+    def test_process_payout_success_appends_ledger(self, mock_random):
+        mock_random.return_value = 0.5 # forces success
+        
+        process_payout(self.payout.id)
+        
+        self.payout.refresh_from_db()
+        self.assertEqual(self.payout.status, 'SUCCESS')
+        
+        # Verify holds
+        holds = Ledger.objects.filter(payout=self.payout, entry_type='HOLD')
+        self.assertEqual(holds.count(), 2)
+        amounts = set([h.amount_paise for h in holds])
+        self.assertEqual(amounts, {-50, 50})
+        
+        # Verify debit
+        debits = Ledger.objects.filter(payout=self.payout, entry_type='DEBIT')
+        self.assertEqual(debits.count(), 1)
+        self.assertEqual(debits.first().amount_paise, -50)
+
+class ReconciliationAPITests(TransactionTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.url = reverse('reconcile_payouts')
+        
+        self.user = User.objects.create_user(username="test@example.com", email="test@example.com", password="password123")
+        self.merchant = Merchant.objects.create(name="Test Merchant", email="test@example.com")
+        
+        self.client.force_authenticate(user=self.user)
+        
+        # Create some test payouts
+        self.payout_pending = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_1", amount_paise=100, status='PENDING')
+        self.payout_processing = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_2", amount_paise=200, status='PROCESSING')
+        self.payout_success = Payout.objects.create(merchant=self.merchant, bank_account_id="bank_3", amount_paise=300, status='SUCCESS')
+        
+        # Create hold ledgers for pending and processing
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-100, payout=self.payout_pending)
+        Ledger.objects.create(merchant=self.merchant, entry_type='HOLD', amount_paise=-200, payout=self.payout_processing)
+        
+        # Idempotency keys
+        IdempotencyKey.objects.create(key="key1", payout=self.payout_pending, status='PENDING')
+        IdempotencyKey.objects.create(key="key2", payout=self.payout_processing, status='PENDING')
+
+    def test_reconcile_success_and_failure(self):
+        csv_content = f"payout_id,status\n{self.payout_pending.id},SUCCESS\n{self.payout_processing.id},FAILED\n"
+        csv_file = SimpleUploadedFile("reconcile.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post(self.url, {'file': csv_file}, format='multipart')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['reconciled'], 2)
+        self.assertEqual(response.data['skipped'], 0)
+        
+        self.payout_pending.refresh_from_db()
+        self.assertEqual(self.payout_pending.status, 'SUCCESS')
+        
+        # Verify hold is deleted, debit is created
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_pending, entry_type='HOLD').exists())
+        self.assertTrue(Ledger.objects.filter(payout=self.payout_pending, entry_type='DEBIT').exists())
+        self.assertEqual(IdempotencyKey.objects.get(payout=self.payout_pending).status, 'COMPLETED')
+        
+        self.payout_processing.refresh_from_db()
+        self.assertEqual(self.payout_processing.status, 'FAILED')
+        
+        # Verify hold is deleted, no debit is created
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_processing, entry_type='HOLD').exists())
+        self.assertFalse(Ledger.objects.filter(payout=self.payout_processing, entry_type='DEBIT').exists())
+        self.assertEqual(IdempotencyKey.objects.get(payout=self.payout_processing).status, 'COMPLETED')
+
+    def test_reconcile_invalid_status_and_terminal(self):
+        csv_content = f"payout_id,status\n{self.payout_pending.id},INVALID\n{self.payout_success.id},SUCCESS\n"
+        csv_file = SimpleUploadedFile("reconcile.csv", csv_content.encode('utf-8'), content_type="text/csv")
+        
+        response = self.client.post(self.url, {'file': csv_file}, format='multipart')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['reconciled'], 0)
+        self.assertEqual(response.data['skipped'], 2)
+        
+        # Ensure nothing changed
+        self.payout_pending.refresh_from_db()
+        self.assertEqual(self.payout_pending.status, 'PENDING')
+        self.assertTrue(Ledger.objects.filter(payout=self.payout_pending, entry_type='HOLD').exists())

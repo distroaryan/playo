@@ -42,7 +42,7 @@ def _update_redis_idempotency(payout):
 def rollback_payout(payout_id, reason):
     """
     Rolls back a failed or timed-out payout.
-    Releases funds back to the available balance by deleting the HOLD ledger.
+    Releases funds back to the available balance by appending a positive HOLD ledger.
     Updates Redis idempotency key with the final response.
     """
     logger.info(f"Rolling back payout {payout_id}. Reason: {reason}")
@@ -51,8 +51,13 @@ def rollback_payout(payout_id, reason):
         payout.status = 'FAILED'
         payout.save(update_fields=['status', 'updated_at'])
 
-        # Delete the HOLD row — funds are released back to available balance
-        Ledger.objects.filter(payout=payout, entry_type='HOLD').delete()
+        # Append a positive HOLD row — funds are released back to available balance
+        Ledger.objects.create(
+            merchant=payout.merchant,
+            entry_type='HOLD',
+            amount_paise=abs(payout.amount_paise),
+            payout=payout
+        )
 
     # Update Redis idempotency key with the final response
     _update_redis_idempotency(payout)
@@ -94,15 +99,20 @@ def process_payout(self, payout_id):
                 payout.status = 'SUCCESS'
                 payout.save(update_fields=['status', 'updated_at'])
 
-                # Update DEBIT to finalize
-                # Why we are not creating a new Ledger? 
-                # Ans: Because creating a new entry can cause a race conditions, updation is subject to row level locks
-                Ledger.objects.filter(
-                    payout=payout,
+                # Append positive HOLD to cancel the initial HOLD
+                Ledger.objects.create(
+                    merchant=payout.merchant,
                     entry_type='HOLD',
-                ).update(
+                    amount_paise=abs(payout.amount_paise),
+                    payout=payout
+                )
+                
+                # Append negative DEBIT to finalize
+                Ledger.objects.create(
+                    merchant=payout.merchant,
                     entry_type='DEBIT',
-                    amount_paise=-payout.amount_paise
+                    amount_paise=-abs(payout.amount_paise),
+                    payout=payout
                 )
 
             # Update Redis idempotency key with the final response
@@ -156,19 +166,20 @@ def relay_outbox():
         events = OutboxEvent.objects.select_for_update(skip_locked=True).filter(
             status='PENDING'
         ).order_by('created_at')[:10]
-        
+
         # Evaluate queryset inside the atomic block
         for event in events:
             try:
-                # payload contains payout_id
-                payout_id = event.payload.get('payout_id')
-                if payout_id:
-                    process_payout.delay(payout_id)
-                
-                event.status = 'PROCESSED'
-                event.processed_at = timezone.now()
-                event.save(update_fields=['status', 'processed_at'])
-                logger.info(f"Relayed outbox event: {event.id}")
+                # payload contains payout_id and we also per-event isolation
+                with transaction.atomic():    
+                    payout_id = event.payload.get('payout_id')
+                    if payout_id:
+                        process_payout.delay(payout_id)
+                    
+                    event.status = 'PROCESSED'
+                    event.processed_at = timezone.now()
+                    event.save(update_fields=['status', 'processed_at'])
+                    logger.info(f"Relayed outbox event: {event.id}")
             except Exception as e:
                 # If Celery enqueue raises an exception, we catch it here.
                 # The event stays PENDING and will be retried on next poll.

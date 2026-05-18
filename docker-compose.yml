@@ -14,8 +14,6 @@ services:
       POSTGRES_PASSWORD: playto_pass
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     networks:
       - playto-network
     healthcheck:
@@ -47,11 +45,12 @@ services:
     command: >
       sh -c "python manage.py migrate --noinput &&
              python seed.py &&
-             gunicorn playto.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
       REDIS_URL: redis://redis:6379/0
-      DEFAULT_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
       DJANGO_SETTINGS_MODULE: playto.settings
       ALLOWED_HOSTS: "*"
     ports:
@@ -63,6 +62,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   # ─── Celery Worker ───────────────────────────────────────────
   celery-worker:
@@ -71,10 +76,11 @@ services:
       dockerfile: Dockerfile
     container_name: playto-celery-worker
     command: celery -A playto worker --loglevel=info --pool=solo
+    volumes:
+      - .:/app
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
       REDIS_URL: redis://redis:6379/0
-      DEFAULT_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
       DJANGO_SETTINGS_MODULE: playto.settings
     networks:
       - playto-network
@@ -84,7 +90,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
 
   # ─── Celery Beat (Periodic Task Scheduler) ───────────────────
   celery-beat:
@@ -93,10 +99,11 @@ services:
       dockerfile: Dockerfile
     container_name: playto-celery-beat
     command: celery -A playto beat --loglevel=info
+    volumes:
+      - .:/app
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
       REDIS_URL: redis://redis:6379/0
-      DEFAULT_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
       DJANGO_SETTINGS_MODULE: playto.settings
     networks:
       - playto-network
@@ -106,7 +113,7 @@ services:
       redis:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
 
   # ─── Celery Flower (Monitoring Dashboard) ────────────────────
   flower:
@@ -115,10 +122,11 @@ services:
       dockerfile: Dockerfile
     container_name: playto-flower
     command: celery -A playto flower --port=5555
+    volumes:
+      - .:/app
     environment:
       DATABASE_URL: postgres://playto_user:playto_pass@postgres:5432/playto_db
       REDIS_URL: redis://redis:6379/0
-      DEFAULT_MERCHANT_ID: "00000000-0000-0000-0000-000000000000"
       DJANGO_SETTINGS_MODULE: playto.settings
     ports:
       - "5555:5555"
@@ -130,12 +138,17 @@ services:
       celery-worker:
         condition: service_started
 
-  # ─── React Frontend (Vite) ──────────────────────────────────
   frontend:
     build:
       context: ./web
       dockerfile: Dockerfile
     container_name: playto-frontend
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
     ports:
       - "5173:5173"
     networks:
@@ -148,7 +161,5 @@ networks:
   playto-network:
     driver: bridge
 
-# ─── Persistent Volumes ─────────────────────────────────────────
-volumes:
-  postgres_data:
+
 
